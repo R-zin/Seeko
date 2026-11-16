@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/pipeline")
 @router.get("/status")
 def status():
     return {"paused": P.state["paused"], "running": P.state["running"], "applied_today": applied_today(),
-            "daily_cap": get_settings().daily_apply_cap, "approval_mode": get_settings().approval_mode}
+            "daily_cap": get_settings().daily_apply_cap, "llm_configured": P.llm_configured(), "approval_mode": get_settings().approval_mode}
 
 
 @router.post("/discover")

@@ -49,3 +49,32 @@ async def test_loop_survives_a_crashing_job(session, monkeypatch):
     P.state["paused"] = False
     await asyncio.wait_for(P.loop(), 5)            # must return normally instead of raising
     assert calls == ["boom"]
+
+
+class _Closable:
+    def __init__(self): self.closed = False
+    async def close(self): self.closed = True
+    async def stop(self): self.closed = True
+    async def new_page(self):
+        class P:
+            async def goto(self, *a, **k): pass
+        return P()
+
+
+async def test_apply_job_closes_browser_when_filling_fails(session, monkeypatch):
+    mk(session, "x", "tailored")
+    ctx, pw = _Closable(), _Closable()
+    async def fake_open(name, headless=True): return pw, ctx
+    async def boom(*a, **k): raise RuntimeError("llm down")
+    monkeypatch.setattr(P, "open_context", fake_open); monkeypatch.setattr(P, "fill_application", boom)
+    monkeypatch.setattr(P, "load_profile", lambda: None); monkeypatch.setattr(P, "load_resume", lambda: "")
+    with pytest.raises(RuntimeError): await P.apply_job("x", {"url": "u", "title": "t"})
+    assert ctx.closed and pw.closed and "x" not in P.pending
+
+
+def test_worker_idle_without_llm_config(monkeypatch):
+    S = lambda **k: type("S", (), {"llm_base_url": "", "llm_api_key": "", **k})()
+    monkeypatch.setattr(P, "get_settings", lambda: S())
+    assert not P.llm_configured()
+    monkeypatch.setattr(P, "get_settings", lambda: S(llm_base_url="http://localhost:11434/v1"))
+    assert P.llm_configured()

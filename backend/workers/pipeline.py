@@ -67,16 +67,23 @@ async def process_job(job_id: str) -> None:
 async def apply_job(job_id: str, jd: dict) -> None:
     _set(job_id, status="applying")
     pw, ctx = await open_context("apply", headless=get_settings().approval_mode is False)
-    page = await ctx.new_page(); await page.goto(jd["url"], wait_until="domcontentloaded")
-    res = await fill_application(page, load_profile(), load_resume(), ARTIFACTS_DIR / job_id / "tailored_resume.pdf", jd,
-                                 screenshot_to=ARTIFACTS_DIR / job_id / "filled_form.png")
-    action = decide(res)
-    if action == "submit":
-        await submit(page); _set(job_id, status="applied", applied_at=utcnow()); await ctx.close(); await pw.stop()
-    else:
-        pending[job_id] = (pw, ctx, page)
-        note = ("" if res.ready else f"needs human: blockers={res.blockers} fields={res.needs_human}")
-        _set(job_id, status="needs_review", error=note); log(f"awaiting review {jd['title']} {note}", "warn" if note else "info", job_id)
+    keep_open = False
+    try:
+        page = await ctx.new_page(); await page.goto(jd["url"], wait_until="domcontentloaded")
+        res = await fill_application(page, load_profile(), load_resume(), ARTIFACTS_DIR / job_id / "tailored_resume.pdf", jd,
+                                     screenshot_to=ARTIFACTS_DIR / job_id / "filled_form.png")
+        action = decide(res)
+        if action == "submit":
+            await submit(page); _set(job_id, status="applied", applied_at=utcnow())
+            return
+        keep_open = True      # page stays open in `pending` until the user approves or skips
+    finally:
+        if not keep_open:     # success, or any exception: never leak a browser
+            try: await ctx.close()
+            finally: await pw.stop()
+    pending[job_id] = (pw, ctx, page)
+    note = "" if res.ready else f"needs human: blockers={res.blockers} fields={res.needs_human}"
+    _set(job_id, status="needs_review", error=note); log(f"awaiting review {jd['title']} {note}", "warn" if note else "info", job_id)
 
 
 async def approve(job_id: str) -> bool:
@@ -128,6 +135,12 @@ async def shutdown() -> None:
         except Exception: pass
 
 
+def llm_configured() -> bool:
+    """Without a base URL or key, every call would hit api.openai.com with a dummy key and fail - so don't try."""
+    st = get_settings()
+    return bool(st.llm_base_url.strip() or st.llm_api_key.strip())
+
+
 def discovery_due(now: float | None = None) -> bool:
     n = get_settings().discovery_interval_min
     return n > 0 and (now or time.time()) - state["last_discovery"] >= n * 60
@@ -141,9 +154,11 @@ async def loop() -> None:
             if not state["paused"]:
                 if discovery_due():
                     state["last_discovery"] = time.time(); await discover()
-                with SessionLocal() as s:
-                    j = s.query(Job).filter(Job.status.in_(["scraped", "scored", "tailoring", "tailored"])).order_by(Job.discovered_at).first()
-                    jid = j.id if j else None
+                jid = None
+                if llm_configured():
+                    with SessionLocal() as s:
+                        j = s.query(Job).filter(Job.status.in_(["scraped", "scored", "tailoring", "tailored"])).order_by(Job.discovered_at).first()
+                        jid = j.id if j else None
                 if jid: await process_job(jid); continue
                 await notion.retry_dirty()
         except asyncio.CancelledError: raise

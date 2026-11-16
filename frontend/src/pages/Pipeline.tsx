@@ -1,72 +1,250 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import ReactDiffViewer from 'react-diff-viewer-continued'
 import { api, type Job, type JobDetail } from '../api'
-import { Card, Badge, btnCls, btn2Cls, useAction, Msg } from '../ui'
+import { Badge, Figure, Kicker, Msg, btn2Cls, btnAccentCls, btnCls, linkBtnCls, pad, useAction, useDark } from '../ui'
+
+const FILTERS = [
+  { key: 'all', label: 'All', match: (_: Job) => true },
+  { key: 'review', label: 'Needs review', match: (j: Job) => j.status === 'needs_review' },
+  { key: 'active', label: 'In progress', match: (j: Job) => ['scraped', 'scored', 'tailoring', 'tailored', 'applying'].includes(j.status) },
+  { key: 'applied', label: 'Applied', match: (j: Job) => j.status === 'applied' },
+  { key: 'closed', label: 'Closed', match: (j: Job) => ['skipped', 'failed'].includes(j.status) },
+] as const
+
+function useDiffStyles() {
+  const dark = useDark()
+  const v = (d: string, l: string) => (dark ? d : l)
+  return {
+    dark,
+    styles: {
+      variables: {
+        light: {
+          diffViewerBackground: '#f4f2ec', diffViewerColor: '#111', gutterBackground: '#ebe8e0', gutterColor: '#6b6862',
+          addedBackground: '#e3efe6', addedGutterBackground: '#d4e7da', wordAddedBackground: '#b9dcc4', addedColor: '#111',
+          removedBackground: '#fbe4e6', removedGutterBackground: '#f6d3d7', wordRemovedBackground: '#f2b6bd', removedColor: '#111',
+          codeFoldBackground: '#ebe8e0', codeFoldGutterBackground: '#e2dfd6', codeFoldContentColor: '#6b6862', emptyLineBackground: '#f4f2ec',
+        },
+        dark: {
+          diffViewerBackground: '#0f0f0e', diffViewerColor: '#f1efe8', gutterBackground: '#1a1a18', gutterColor: '#8f8b82',
+          addedBackground: '#132a1d', addedGutterBackground: '#183424', wordAddedBackground: '#1f4d33', addedColor: '#f1efe8',
+          removedBackground: '#3a1418', removedGutterBackground: '#45181d', wordRemovedBackground: '#6b1f28', removedColor: '#f1efe8',
+          codeFoldBackground: '#1a1a18', codeFoldGutterBackground: '#22221f', codeFoldContentColor: '#8f8b82', emptyLineBackground: '#0f0f0e',
+        },
+      },
+      contentText: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '12px', lineHeight: '1.6', whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const },
+      diffContainer: { tableLayout: 'fixed' as const, width: '100%' },
+      gutter: { minWidth: '36px', padding: '0 8px', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '11px' },
+      line: { borderBottom: `1px solid ${v('#1f1f1c', '#e2dfd6')}` },
+    },
+  }
+}
 
 function Review({ id, onChange }: { id: string; onChange: () => void }) {
-  const [d, setD] = useState<JobDetail | null>(null); const a = useAction()
-  useEffect(() => { setD(null); api(`/jobs/${id}`).then(setD) }, [id])
-  if (!d) return <p className="text-sm text-slate-500">Loading…</p>
-  const cl = useAction()
-  const act = (what: 'approve' | 'skip') => a.run(async () => { await api(`/pipeline/jobs/${id}/${what}`, { method: 'POST' }); onChange(); return what === 'approve' ? 'Submitted' : 'Skipped' })
+  const [d, setD] = useState<JobDetail | null>(null)
+  const [err, setErr] = useState('')
+  const a = useAction(); const cl = useAction()
+  const diff = useDiffStyles()
+  useEffect(() => { setD(null); setErr(''); api(`/jobs/${id}`).then(setD).catch(e => setErr(e.message)) }, [id])
+
+  if (err) return <p className="font-mono text-[12px] text-accent">{err}</p>
+  if (!d) return <div className="space-y-4"><div className="h-4 w-40 bg-paper-2" /><div className="h-12 w-3/4 bg-paper-2" /><div className="h-64 bg-paper-2" /></div>
+
+  const act = (what: 'approve' | 'skip') => a.run(async () => {
+    await api(`/pipeline/jobs/${id}/${what}`, { method: 'POST' }); onChange()
+    setD({ ...d, status: what === 'approve' ? 'applied' : 'skipped' })
+    return what === 'approve' ? 'Submitted.' : 'Skipped.'
+  })
+  const retry = () => a.run(async () => { const r = await api(`/pipeline/jobs/${id}/retry`, { method: 'POST' }); onChange(); setD({ ...d, status: r.status }); return `Re-queued at “${r.status}”.` })
+  const awaiting = d.status === 'needs_review'
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><h3 className="font-semibold">{d.title} <span className="font-normal text-slate-500">· {d.company}</span></h3>
-          <a className="text-xs text-indigo-600 underline" href={d.url} target="_blank" rel="noreferrer">{d.url}</a></div>
-        <div className="flex gap-2">
-          <button className={btnCls} disabled={a.busy || d.status !== 'needs_review'} onClick={() => confirm('Submit this application now?') && act('approve')}>Approve &amp; Submit</button>
+    <article>
+      {/* Headline */}
+      <Kicker>{d.company} — {d.source}{d.location ? ` — ${d.location}` : ''}</Kicker>
+      <h2 className="mt-3 text-[clamp(32px,4.2vw,56px)] font-bold leading-[0.98] tracking-[-0.035em]">{d.title}</h2>
+      <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
+        <Badge s={d.status} />
+        {d.score != null && <span className="text-[13px]"><span className="font-semibold tabular-nums">{d.score}</span><span className="text-mute"> / 100 match</span></span>}
+        <a className={linkBtnCls + ' max-w-full truncate'} href={d.url} target="_blank" rel="noreferrer">View posting ↗</a>
+      </div>
+
+      {/* Decision bar */}
+      <div className={`mt-8 flex flex-wrap items-center gap-3 border-y py-4 ${awaiting ? 'border-accent' : 'border-hair'}`}>
+        {awaiting ? <>
+          <span className="mr-auto text-[14px] font-medium">Form filled and paused before submit.</span>
+          <button className={btnAccentCls} disabled={a.busy} onClick={() => confirm(`Submit the application to ${d.company} now?`) && act('approve')}>Approve &amp; submit</button>
           <button className={btn2Cls} disabled={a.busy} onClick={() => act('skip')}>Skip</button>
-        </div>
+        </> : ['failed', 'skipped'].includes(d.status) ? <>
+          <span className="mr-auto text-[14px] text-mute">This job is closed.</span>
+          <button className={btn2Cls} disabled={a.busy} onClick={retry}>Retry</button>
+        </> : <>
+          <span className="mr-auto text-[14px] text-mute">{d.status === 'applied' ? `Applied${d.applied_at ? ' on ' + d.applied_at.slice(0, 10) : ''}.` : 'Working — the review opens once the form is filled.'}</span>
+          {d.status !== 'applied' && <button className={btn2Cls} disabled={a.busy} onClick={() => act('skip')}>Skip</button>}
+        </>}
       </div>
       <Msg m={a.msg} />
-      <div className="space-y-2">
-        <button className={btn2Cls} disabled={cl.busy} onClick={() => cl.run(async () => { const r = await api(`/jobs/${id}/cover-letter`, { method: 'POST' }); setD({ ...d, cover_letter: r.letter }); return 'Cover letter generated' })}>{cl.busy ? 'Writing…' : d.cover_letter ? 'Regenerate cover letter' : 'Generate cover letter'}</button>
-        <Msg m={cl.msg} />
-        {d.cover_letter && <textarea readOnly className="w-full rounded border border-slate-200 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-900" rows={8} value={d.cover_letter} />}
-      </div>
-      {d.error && <p className="rounded bg-orange-50 p-2 text-xs text-orange-800 dark:bg-orange-950 dark:text-orange-300">{d.error}</p>}
-      {!d.tailored_ok && d.tailored_summary && <p className="text-xs text-amber-700">Tailoring was rejected by safety checks — the untailored base resume is used.</p>}
-      <p className="text-sm"><b>Tailoring summary:</b> {d.tailored_summary || '—'}</p>
-      {d.missing_keywords.length > 0 && <p className="text-xs text-slate-500">Missing keywords: {d.missing_keywords.join(', ')}</p>}
-      <div className="grid gap-3 lg:grid-cols-2">
-        <div className="max-h-[520px] overflow-auto rounded border border-slate-200 text-xs dark:border-slate-700">
-          {d.tailored_tex ? <ReactDiffViewer oldValue={d.base_tex} newValue={d.tailored_tex} splitView={false} showDiffOnly useDarkTheme={false} /> : <p className="p-3 text-slate-500">No diff yet.</p>}
+      {d.error && <p className="mt-4 border-l-2 border-warn pl-3 text-[13px] leading-relaxed text-warn">{d.error}</p>}
+
+      {/* Notes */}
+      <div className="mt-10 grid grid-cols-12 gap-x-6 gap-y-8">
+        <div className="col-span-12 md:col-span-7">
+          <Kicker>What changed</Kicker>
+          <p className="mt-2 text-[19px] leading-[1.45] tracking-[-0.005em]">{d.tailored_summary || <span className="text-mute">Not tailored yet.</span>}</p>
+          {!d.tailored_ok && d.tailored_summary && <p className="mt-2 text-[13px] text-accent">Rejected by the safety checks — your untailored résumé is used.</p>}
         </div>
-        {d.has_pdf ? <object data={`/api/jobs/${id}/pdf`} type="application/pdf" className="h-[520px] w-full rounded border border-slate-200 dark:border-slate-700"><a href={`/api/jobs/${id}/pdf`}>Open PDF</a></object> : <p className="text-sm text-slate-500">No PDF yet.</p>}
+        <div className="col-span-12 md:col-span-5">
+          <Kicker>Missing from your résumé</Kicker>
+          {d.missing_keywords.length
+            ? <ul className="mt-2 flex flex-wrap gap-x-1 text-[15px] leading-relaxed">{d.missing_keywords.map((k, i) => <li key={k}>{k}{i < d.missing_keywords.length - 1 && <span className="text-mute"> /</span>}</li>)}</ul>
+            : <p className="mt-2 text-[15px] text-mute">Nothing flagged.</p>}
+        </div>
       </div>
-      {d.has_screenshot && <details open><summary className="cursor-pointer text-sm font-medium">Filled form screenshot</summary><img className="mt-2 max-h-[600px] rounded border" src={`/api/jobs/${id}/screenshot?${Date.now()}`} /></details>}
-    </div>)
+
+      {/* Exhibits */}
+      <div className="mt-12 grid grid-cols-12 gap-6">
+        <figure className="col-span-12 xl:col-span-7">
+          <figcaption className="mb-2 flex items-baseline justify-between border-b border-ink pb-2"><Kicker>Fig. 1 — Résumé diff</Kicker><span className="font-mono text-[11px] text-mute">base → tailored</span></figcaption>
+          <div className="max-h-[560px] overflow-auto border border-hair">
+            {d.tailored_tex && d.tailored_tex !== d.base_tex
+              ? <ReactDiffViewer oldValue={d.base_tex} newValue={d.tailored_tex} splitView={false} showDiffOnly useDarkTheme={diff.dark} styles={diff.styles} />
+              : <p className="p-6 text-[14px] text-mute">{d.tailored_tex ? 'No changes — base résumé used as-is.' : 'No tailored version yet.'}</p>}
+          </div>
+        </figure>
+        <figure className="col-span-12 xl:col-span-5">
+          <figcaption className="mb-2 flex items-baseline justify-between border-b border-ink pb-2"><Kicker>Fig. 2 — Compiled PDF</Kicker>{d.has_pdf && <a className="font-mono text-[11px] text-mute hover:text-ink" href={`/api/jobs/${id}/pdf`} target="_blank" rel="noreferrer">open ↗</a>}</figcaption>
+          {d.has_pdf
+            ? <object data={`/api/jobs/${id}/pdf#toolbar=0&view=FitH`} type="application/pdf" className="h-[560px] w-full border border-hair bg-paper-2" aria-label="Tailored résumé PDF">
+                <div className="flex h-full flex-col items-start justify-end gap-3 p-6">
+                  <span className="text-[48px] font-bold leading-none tracking-[-0.04em]">PDF</span>
+                  <span className="max-w-[28ch] text-[13px] text-mute">This browser can’t preview PDFs inline.</span>
+                  <a className={btn2Cls} href={`/api/jobs/${id}/pdf`} target="_blank" rel="noreferrer">Open the PDF ↗</a>
+                </div>
+              </object>
+            : <div className="flex h-[200px] items-center justify-center border border-dashed border-hair text-[14px] text-mute">No PDF yet</div>}
+        </figure>
+      </div>
+
+      {d.has_screenshot && (
+        <figure className="mt-12">
+          <figcaption className="mb-2 border-b border-ink pb-2"><Kicker>Fig. 3 — Filled application, before submit</Kicker></figcaption>
+          <img className="max-h-[720px] w-full border border-hair object-contain object-top" src={`/api/jobs/${id}/screenshot`} alt={`Filled application form for ${d.title} at ${d.company}`} />
+        </figure>
+      )}
+
+      {/* Cover letter */}
+      <section className="mt-12">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3 border-b border-ink pb-2">
+          <Kicker>Cover letter</Kicker>
+          <button className={linkBtnCls} disabled={cl.busy} onClick={() => cl.run(async () => { const r = await api(`/jobs/${id}/cover-letter`, { method: 'POST' }); setD({ ...d, cover_letter: r.letter }); return 'Drafted from your résumé and profile only.' })}>
+            {cl.busy ? 'Writing…' : d.cover_letter ? 'Redraft' : 'Draft a letter'}
+          </button>
+        </div>
+        <Msg m={cl.msg} />
+        {d.cover_letter
+          ? <div className="max-w-[68ch] whitespace-pre-wrap text-[16px] leading-[1.65]">{d.cover_letter}</div>
+          : !cl.busy && <p className="text-[14px] text-mute">No letter yet.</p>}
+      </section>
+    </article>
+  )
 }
 
 export default function Pipeline() {
-  const [jobs, setJobs] = useState<Job[]>([]); const [sel, setSel] = useState<string | null>(null)
-  const [st, setSt] = useState<any>(null); const a = useAction()
-  const load = useCallback(() => { api('/jobs').then(setJobs); api('/pipeline/status').then(setSt) }, [])
+  const [jobs, setJobs] = useState<Job[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [sel, setSel] = useState<string | null>(null)
+  const [filter, setFilter] = useState<(typeof FILTERS)[number]['key']>('all')
+  const [st, setSt] = useState<any>(null)
+  const a = useAction()
+
+  const load = useCallback(() => {
+    api('/jobs').then(j => { setJobs(j); setLoaded(true) }).catch(() => setLoaded(true))
+    api('/pipeline/status').then(setSt).catch(() => {})
+  }, [])
   useEffect(() => { load(); const t = setInterval(load, 4000); return () => clearInterval(t) }, [load])
+
   const review = jobs.filter(j => j.status === 'needs_review')
+  const shown = useMemo(() => jobs.filter(FILTERS.find(f => f.key === filter)!.match), [jobs, filter])
+  // Auto-open the first job awaiting review
+  useEffect(() => { if (!sel && review[0]) setSel(review[0].id) }, [sel, review])
+
   return (
-    <div className="space-y-4">
-      <Card title="Controls">
-        <div className="flex flex-wrap items-center gap-2">
-          <button className={btnCls} onClick={() => a.run(async () => { await api('/pipeline/discover', { method: 'POST' }); return 'Discovery started' })}>Run discovery</button>
-          <button className={btn2Cls} onClick={() => api(`/pipeline/${st?.paused ? 'resume' : 'pause'}`, { method: 'POST' }).then(load)}>{st?.paused ? 'Resume worker' : 'Pause worker'}</button>
-          {st && <span className="text-xs text-slate-500">Mode: <b>{st.approval_mode ? 'approval gate' : 'full-auto'}</b> · applied today {st.applied_today}/{st.daily_cap}</span>}
-        </div><Msg m={a.msg} />
-      </Card>
-      {review.length > 0 && <p className="rounded bg-orange-100 p-2 text-sm text-orange-900">{review.length} application(s) waiting for your review.</p>}
-      <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
-        <Card title={`Jobs (${jobs.length})`}>
-          <ul className="max-h-[70vh] divide-y divide-slate-100 overflow-auto dark:divide-slate-800">
-            {jobs.map(j => (
-              <li key={j.id}><button onClick={() => setSel(j.id)} className={`w-full px-1 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800 ${sel === j.id ? 'bg-indigo-50 dark:bg-indigo-950' : ''}`}>
-                <div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{j.title}</span><Badge s={j.status} /></div>
-                <div className="flex justify-between text-xs text-slate-500"><span className="truncate">{j.company} · {j.source}</span>{j.score != null && <span className="font-semibold">{j.score}</span>}</div>
-              </button></li>))}
-            {!jobs.length && <li className="py-6 text-center text-sm text-slate-500">No jobs yet — set up your profile, then run discovery.</li>}
-          </ul>
-        </Card>
-        <Card title="Review">{sel ? <Review id={sel} onChange={load} /> : <p className="text-sm text-slate-500">Select a job.</p>}</Card>
+    <div>
+      {/* Figures */}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-8 md:grid-cols-4">
+        <Figure value={pad(jobs.length)} label="Jobs discovered" />
+        <Figure value={pad(review.length)} label="Awaiting your review" accent={review.length > 0} />
+        <Figure value={pad(jobs.filter(j => ['applied'].includes(j.status)).length)} label="Applied, all time" />
+        <Figure value={<>{st?.applied_today ?? 0}<span className="text-mute">/{st?.daily_cap ?? '—'}</span></>} label="Submitted today / cap" />
       </div>
-    </div>)
+
+      {/* Controls */}
+      <div className="mt-10 flex flex-wrap items-center gap-3 border-t-2 border-rule pt-4">
+        <button className={btnCls} disabled={a.busy} onClick={() => a.run(async () => { await api('/pipeline/discover', { method: 'POST' }); setTimeout(load, 1500); return 'Discovery started — new jobs appear below as they are found.' })}>Run discovery</button>
+        <button className={btn2Cls} onClick={() => api(`/pipeline/${st?.paused ? 'resume' : 'pause'}`, { method: 'POST' }).then(load)}>{st?.paused ? 'Resume worker' : 'Pause worker'}</button>
+        <span className="ml-auto text-[13px] text-mute">
+          Mode: <span className={`font-semibold ${st && !st.approval_mode ? 'text-accent' : 'text-ink'}`}>{!st ? '—' : st.approval_mode ? 'Approval gate' : 'Full-auto'}</span>
+        </span>
+      </div>
+      <Msg m={a.msg} />
+
+      {/* Index + review */}
+      <div className="mt-10 grid grid-cols-12 gap-x-8 gap-y-10">
+        <aside className="col-span-12 lg:col-span-4">
+          <div className="flex items-baseline justify-between border-b-2 border-rule pb-2">
+            <h2 className="text-[22px] font-bold tracking-[-0.02em]">Index</h2>
+            <span className="font-mono text-[12px] text-mute">{pad(shown.length)} / {pad(jobs.length)}</span>
+          </div>
+          <div role="tablist" aria-label="Filter jobs" className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+            {FILTERS.map(f => (
+              <button key={f.key} role="tab" aria-selected={filter === f.key} onClick={() => setFilter(f.key)}
+                className={`border-b-2 pb-1 text-[12px] font-semibold uppercase tracking-[0.1em] ${filter === f.key ? 'border-accent text-ink' : 'border-transparent text-mute hover:text-ink'}`}>
+                {f.label}{f.key === 'review' && review.length > 0 && <span className="ml-1 text-accent">{review.length}</span>}
+              </button>
+            ))}
+          </div>
+
+          <ol className="mt-4 max-h-[78vh] overflow-auto border-t border-hair">
+            {shown.map(j => {
+              const on = sel === j.id
+              return (
+                <li key={j.id} className="border-b border-hair">
+                  <button onClick={() => setSel(j.id)} aria-current={on ? 'true' : undefined}
+                    className={`grid w-full grid-cols-[2.25rem_1fr_auto] items-start gap-x-3 py-3.5 pr-2 text-left transition-colors ${on ? 'bg-ink pl-2 text-paper' : 'hover:bg-paper-2'}`}>
+                    <span className={`pt-0.5 font-mono text-[11px] ${on ? 'text-accent' : 'text-mute'}`}>{pad(jobs.indexOf(j) + 1, 3)}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[15px] font-semibold leading-tight tracking-[-0.01em]">{j.title}</span>
+                      <span className={`mt-1 block truncate text-[12.5px] ${on ? 'text-paper/70' : 'text-mute'}`}>{j.company} · {j.source}{j.is_easy_apply ? ' · easy apply' : ''}</span>
+                      <span className="mt-2 block">{on ? <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-paper/80">{j.status.replace('_', ' ')}</span> : <Badge s={j.status} />}</span>
+                    </span>
+                    <span className={`text-right text-[26px] font-bold leading-none tracking-[-0.03em] tabular-nums ${j.score == null ? 'opacity-30' : ''}`}>{j.score ?? '—'}</span>
+                  </button>
+                </li>
+              )
+            })}
+            {loaded && !shown.length && (
+              <li className="py-12">
+                {jobs.length
+                  ? <p className="text-[14px] text-mute">Nothing in this view.</p>
+                  : <>
+                      <p className="text-[22px] font-bold leading-tight tracking-[-0.02em]">No jobs yet.</p>
+                      <p className="mt-2 max-w-[36ch] text-[14px] leading-relaxed text-mute">Add your model, résumé and a few company career pages under <a className="text-ink underline underline-offset-4" href="#setup">Setup</a>, then run discovery.</p>
+                    </>}
+              </li>
+            )}
+          </ol>
+        </aside>
+
+        <div className="col-span-12 lg:col-span-8">
+          {sel ? <Review id={sel} onChange={load} /> : (
+            <div className="border-t-2 border-rule pt-6">
+              <Kicker>Review</Kicker>
+              <p className="mt-3 max-w-[30ch] text-[clamp(28px,3vw,40px)] font-bold leading-[1.05] tracking-[-0.03em] text-mute">
+                Select a job from the index to read the diff, the PDF and the filled form.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
