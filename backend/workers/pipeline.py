@@ -96,14 +96,50 @@ async def skip(job_id: str) -> None:
     _set(job_id, status="skipped"); await notion.sync_job(job_id)
 
 
+def recover_orphans() -> int:
+    """After a restart no browser pages exist: jobs stuck in applying/needs_review go back to 'tailored' to be re-filled."""
+    n = 0
+    with SessionLocal() as s:
+        for j in s.query(Job).filter(Job.status.in_(["applying", "needs_review"])):
+            if j.id not in pending:
+                j.status, j.notion_dirty, n = "tailored", True, n + 1
+                j.error = "re-queued after restart (previous browser session was lost)"
+        s.commit()
+    if n: log(f"recovered {n} job(s) orphaned by restart", "warn")
+    return n
+
+
+def retry(job_id: str) -> str | None:
+    """Re-queue a failed/skipped job from the furthest stage it already completed."""
+    with SessionLocal() as s:
+        j = s.get(Job, job_id)
+        if j is None or j.status not in ("failed", "skipped"): return None
+        if (ARTIFACTS_DIR / job_id / "tailored_resume.pdf").exists(): j.status = "tailored"
+        elif j.score is not None: j.status = "scored"
+        else: j.status = "scraped"
+        j.error, j.notion_dirty = "", True; s.commit(); return j.status
+
+
+async def shutdown() -> None:
+    state["running"] = False
+    for jid in list(pending):
+        _, ctx, _ = pending.pop(jid)
+        try: await ctx.close()
+        except Exception: pass
+
+
 async def loop() -> None:
-    """Background worker: process one job at a time while not paused."""
+    """Background worker: process one job at a time while not paused. Never dies on a single bad job."""
     state["running"] = True
     while state["running"]:
-        if not state["paused"]:
-            with SessionLocal() as s:
-                j = s.query(Job).filter(Job.status.in_(["scraped", "scored", "tailoring", "tailored"])).order_by(Job.discovered_at).first()
-                jid = j.id if j else None
-            if jid: await process_job(jid); continue
-            await notion.retry_dirty()
+        try:
+            if not state["paused"]:
+                with SessionLocal() as s:
+                    j = s.query(Job).filter(Job.status.in_(["scraped", "scored", "tailoring", "tailored"])).order_by(Job.discovered_at).first()
+                    jid = j.id if j else None
+                if jid: await process_job(jid); continue
+                await notion.retry_dirty()
+        except asyncio.CancelledError: raise
+        except Exception as e:
+            log(f"worker loop error: {e}", "error")
         await asyncio.sleep(5)

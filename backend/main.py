@@ -14,9 +14,10 @@ async def lifespan(app: FastAPI):
     init_db()
     import asyncio
     from workers import pipeline
+    pipeline.recover_orphans()
     task = asyncio.create_task(pipeline.loop())
     yield
-    pipeline.state['running'] = False; task.cancel()
+    task.cancel(); await pipeline.shutdown()
 
 
 app = FastAPI(title="Seeko", lifespan=lifespan)

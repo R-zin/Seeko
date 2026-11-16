@@ -38,6 +38,13 @@ async def approve(job_id: str):
 async def skip(job_id: str): await P.skip(job_id); return {"ok": True}
 
 
+@router.post("/jobs/{job_id}/retry")
+def retry(job_id: str):
+    st = P.retry(job_id)
+    if not st: raise HTTPException(409, "only failed or skipped jobs can be retried")
+    return {"ok": True, "status": st}
+
+
 @router.post("/login/{source}")
 async def login(source: str):
     if source not in LOGIN_URLS: raise HTTPException(404, "unknown source")
