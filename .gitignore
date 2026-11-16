@@ -1,0 +1,10 @@
+.env
+data/
+artifacts/
+browser_data/
+backend/.venv/
+__pycache__/
+*.pyc
+node_modules/
+frontend/dist/
+.pytest_cache/
