@@ -15,6 +15,9 @@ def detect_ats_from_url(url: str) -> str:
 async def detect_page(page) -> str:
     kind = detect_ats_from_url(page.url)
     if kind != "generic": return kind
+    for fr in page.frames[1:]:                      # form embedded in an iframe on the company's own site
+        k = detect_ats_from_url(fr.url)
+        if k not in ("generic", "linkedin_easy_apply"): return k
     markers = await page.evaluate("""() => ({
       gh: !!document.querySelector('#application_form, #grnhse_app, form[action*="greenhouse"]'),
       lever: !!document.querySelector('.application-form, form[action*="lever.co"]'),

@@ -61,3 +61,41 @@ async def test_lever_flags_captcha_and_unknown_required(page, pdf, monkeypatch):
     stub_mapper(monkeypatch, lambda fs: by_label(fs, {"Full name": "Jane Doe", "Email": "jane@example.com"}))
     res = await fill_application(page, PROFILE, "", pdf, JOB)
     assert "captcha" in res.blockers and not res.ready
+
+
+async def test_form_inside_iframe_behind_apply_button_and_cookie_banner(page, pdf, monkeypatch):
+    await page.goto((FX / "iframe_host.html").as_uri())
+    stub_mapper(monkeypatch, lambda fs: by_label(fs, {"First Name": "Jane", "Email": "jane@example.com", "authorized": "Yes",
+                                                      "sponsorship": "No", "Why do you": "Because.", "privacy": True}))
+    res = await fill_application(page, PROFILE, "", pdf, JOB)
+    assert res.ready and res.filled >= 6
+    inner = page.frames[1]
+    assert await inner.input_value("#fn") == "Jane" and await inner.is_checked("input[name=sp][value=n]")
+    assert await page.locator("#cookie").count() == 0                      # banner dismissed
+
+
+def test_labels_are_cleaned():
+    import asyncio
+    async def go():
+        async with async_playwright() as pw:
+            b = await pw.chromium.launch(); p = await b.new_page()
+            await p.set_content("<label>Full name\n<span>✱</span><input name=n required></label>")
+            from applier.extract import extract_fields
+            fs = await extract_fields(p); await b.close(); return fs
+    assert asyncio.run(go())[0].label == "Full name"
+
+
+def test_file_role_never_sends_resume_to_cover_letter():
+    from applier.engine import file_role
+    from applier.extract import Field
+    mk = lambda **k: Field(id="0", kind="file", **k)
+    assert file_role(mk(label="Attach", dom_id="resume"), 2) == "resume"
+    assert file_role(mk(label="Attach", dom_id="cover_letter"), 2) == "cover_letter"
+    assert file_role(mk(label="Attach"), 2) == "other"          # ambiguous with 2 inputs -> human
+    assert file_role(mk(label="Upload"), 1) == "resume"         # sole file input
+
+
+async def test_iframe_greenhouse_detected(page):
+    await page.set_content('<iframe src="https://boards.greenhouse.io/embed/job_app?for=x"></iframe>')
+    from applier.detect import detect_ats_from_url
+    assert detect_ats_from_url("https://boards.greenhouse.io/embed/job_app?for=x") == "greenhouse"
