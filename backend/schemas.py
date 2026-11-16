@@ -1,6 +1,11 @@
 from __future__ import annotations
 from datetime import datetime
 from pydantic import BaseModel, Field
+from datetime import timezone
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class JobPosting(BaseModel):
@@ -12,7 +17,7 @@ class JobPosting(BaseModel):
     url: str
     jd_text: str = ""
     is_easy_apply: bool = False
-    discovered_at: datetime = Field(default_factory=datetime.utcnow)
+    discovered_at: datetime = Field(default_factory=utcnow)
 
 
 class Score(BaseModel):

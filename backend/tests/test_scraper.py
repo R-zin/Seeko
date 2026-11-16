@@ -50,3 +50,21 @@ async def test_score_job(monkeypatch):
     monkeypatch.setattr("scraper.scorer.complete_json", fake)
     s = await score_job("jd", "t", "c", resume="r", llm=object())
     assert s.score == 77 and s.missing_keywords == ["Kafka"]
+
+
+async def test_workday_paginates_with_page_size_20_and_retries_429(monkeypatch):
+    import asyncio as aio
+    from scraper import ats
+    async def nosleep(_): pass
+    monkeypatch.setattr(ats.asyncio, "sleep", nosleep)
+    seen = {"limits": [], "429": 0}
+    def h(req):
+        if req.method == "POST":
+            body = json.loads(req.content); seen["limits"].append(body["limit"])
+            if body["offset"] == 0 and seen["429"] == 0: seen["429"] += 1; return httpx.Response(429)
+            n = 20 if body["offset"] < 40 else 0
+            return httpx.Response(200, json={"jobPostings": [{"title": f"J{body['offset']+i}", "externalPath": f"/job/x/{body['offset']+i}", "locationsText": "NYC"} for i in range(n)]})
+        return httpx.Response(200, json={"jobPostingInfo": {"jobDescription": "<p>desc</p>"}})
+    c = httpx.AsyncClient(transport=httpx.MockTransport(h))
+    jobs = await ats.fetch_workday(c, "acme.wd5.myworkdayjobs.com|Careers", limit=30)
+    assert len(jobs) == 30 and set(seen["limits"]) == {20} and seen["429"] == 1 and jobs[0].jd_text == "desc"

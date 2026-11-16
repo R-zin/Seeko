@@ -3,14 +3,14 @@ from __future__ import annotations
 from datetime import datetime, time
 from sqlalchemy import select, func
 from config.settings import get_settings
-from db import Job, SessionLocal
+from db import utcnow, Job, SessionLocal
 from .engine import FillResult
 
 pending: dict[str, object] = {}   # job_id -> (pw, ctx, page) kept open while awaiting approval
 
 
 def applied_today() -> int:
-    start = datetime.combine(datetime.utcnow().date(), time.min)
+    start = datetime.combine(utcnow().date(), time.min)
     with SessionLocal() as s:
         return s.scalar(select(func.count()).select_from(Job).where(Job.status == "applied", Job.applied_at >= start)) or 0
 

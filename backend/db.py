@@ -1,5 +1,10 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)   # naive UTC, as stored
+
 from sqlalchemy import create_engine, String, Integer, Text, Boolean, DateTime, Float, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from config.settings import get_settings, DATA_DIR
@@ -25,7 +30,7 @@ class Job(Base):
     dedupe_key: Mapped[str] = mapped_column(String)
     jd_text: Mapped[str] = mapped_column(Text, default="")
     is_easy_apply: Mapped[bool] = mapped_column(Boolean, default=False)
-    discovered_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     status: Mapped[str] = mapped_column(String, default="scraped")  # scraped scored tailoring tailored applying needs_review applied failed skipped
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     missing_keywords: Mapped[str] = mapped_column(Text, default="[]")
@@ -40,7 +45,7 @@ class Job(Base):
 class LogEntry(Base):
     __tablename__ = "logs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ts: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    ts: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     level: Mapped[str] = mapped_column(String, default="info")
     job_id: Mapped[str] = mapped_column(String, default="")
     message: Mapped[str] = mapped_column(Text)

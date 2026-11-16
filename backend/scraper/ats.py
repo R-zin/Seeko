@@ -1,6 +1,6 @@
 """Direct company career pages: Greenhouse, Lever, Ashby, Workday via their public JSON endpoints."""
 from __future__ import annotations
-import re
+import asyncio, re
 from urllib.parse import urlsplit
 import httpx
 from schemas import JobPosting
@@ -39,18 +39,34 @@ async def fetch_ashby(c: httpx.AsyncClient, slug: str) -> list[JobPosting]:
                        url=j["jobUrl"], jd_text=j.get("descriptionPlain", "")) for j in r.json().get("jobs", [])]
 
 
-async def fetch_workday(c: httpx.AsyncClient, slug: str, limit: int = 40) -> list[JobPosting]:
+async def _wd_request(c: httpx.AsyncClient, method: str, url: str, **kw) -> httpx.Response:
+    """Workday rate-limits aggressively: back off and retry on 429/5xx."""
+    for attempt in range(4):
+        r = await c.request(method, url, **kw)
+        if r.status_code not in (429, 500, 502, 503): return r
+        await asyncio.sleep(min(2 ** attempt * 2, 20))
+    return r
+
+
+async def fetch_workday(c: httpx.AsyncClient, slug: str, limit: int = 40, detail_delay: float = 0.6) -> list[JobPosting]:
     host, site = slug.split("|"); tenant = host.split(".")[0]
     base = f"https://{host}/wday/cxs/{tenant}/{site}"
-    r = await c.post(f"{base}/jobs", json={"limit": limit, "offset": 0, "searchText": "", "appliedFacets": {}}); r.raise_for_status()
-    out = []
-    for j in r.json().get("jobPostings", []):
-        path = j["externalPath"]
-        try:
-            d = (await c.get(f"{base}{path}")).json().get("jobPostingInfo", {})
-        except Exception: d = {}
-        out.append(JobPosting(source="workday", company=tenant, title=j["title"], location=j.get("locationsText", ""),
-                              url=f"https://{host}/{site}{path}", jd_text=_text(d.get("jobDescription", ""))))
+    hdr = {"Content-Type": "application/json", "Accept": "application/json"}
+    out: list[JobPosting] = []; offset = 0
+    while len(out) < limit:
+        r = await _wd_request(c, "POST", f"{base}/jobs", headers=hdr,
+                              json={"limit": 20, "offset": offset, "searchText": "", "appliedFacets": {}})  # Workday max page size = 20
+        r.raise_for_status(); postings = r.json().get("jobPostings", [])
+        if not postings: break
+        for j in postings:
+            if len(out) >= limit: break
+            path = j["externalPath"]
+            await asyncio.sleep(detail_delay)
+            d = await _wd_request(c, "GET", f"{base}{path}", headers={"Accept": "application/json"})
+            info = d.json().get("jobPostingInfo", {}) if d.status_code == 200 else {}
+            out.append(JobPosting(source="workday", company=tenant, title=j["title"], location=j.get("locationsText", ""),
+                                  url=f"https://{host}/{site}{path}", jd_text=_text(info.get("jobDescription", ""))))
+        offset += 20
     return out
 
 

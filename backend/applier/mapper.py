@@ -21,6 +21,7 @@ candidate profile and resume. Rules:
 - Never invent facts, employers, skills, numbers, or personal data. If the answer is not supported, return value null.
 - select/radio: value must be exactly one of the listed options. checkbox: true/false. file inputs: skip (handled separately).
 - Open-ended questions ("why this company", project descriptions): 2-4 truthful sentences grounded in the resume and the job description.
+- Checkbox with a non-empty `group` is one option of a multi-choice question named by `group` (e.g. pronouns): return true ONLY if the profile or resume explicitly states that choice, otherwise null.
 - Legal/EEO/demographic questions: choose a 'decline to answer' style option if available, else null.
 Return JSON {"answers": [{"id": "...", "value": ..., "confident": true|false}]}."""
 

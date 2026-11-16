@@ -99,3 +99,11 @@ async def test_iframe_greenhouse_detected(page):
     await page.set_content('<iframe src="https://boards.greenhouse.io/embed/job_app?for=x"></iframe>')
     from applier.detect import detect_ats_from_url
     assert detect_ats_from_url("https://boards.greenhouse.io/embed/job_app?for=x") == "greenhouse"
+
+
+async def test_checkbox_group_label_is_extracted(page):
+    from applier.extract import extract_fields
+    await page.set_content('''<ul><li class="application-question"><div class="application-label">Pronouns <span>✱</span></div>
+      <label><input type=checkbox name=p value=a>He/him</label><label><input type=checkbox name=p value=b>They/them</label></li></ul>''')
+    fs = await extract_fields(page)
+    assert [f.group for f in fs] == ["Pronouns", "Pronouns"] and [f.label for f in fs] == ["He/him", "They/them"]

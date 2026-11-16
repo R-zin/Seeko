@@ -13,6 +13,13 @@ JS = """(start) => {
     const fs = e.closest('fieldset'); if (fs && fs.querySelector('legend')) return fs.querySelector('legend').innerText.trim();
     const p = e.closest('label, .field, .form-group, [class*="field"], div'); return p ? p.innerText.split('\\n')[0].trim() : '';
   };
+  const groupOf = e => {
+    if (e.type !== 'checkbox') return '';
+    const box = e.closest('fieldset, .application-question, li, .field, [role=group]'); if (!box) return '';
+    if (box.querySelectorAll('input[type=checkbox]').length < 2) return '';
+    const lg = box.querySelector('legend, .application-label, label:not(:has(input))');
+    return (lg ? lg.innerText : box.innerText.split('\\n')[0]).replace(/[\u2731*]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  };
   const out = []; let n = start; const seenGroups = new Set();
   document.querySelectorAll('input, select, textarea').forEach(e => {
     const t = (e.type || e.tagName).toLowerCase();
@@ -24,13 +31,13 @@ JS = """(start) => {
     if (t === 'radio') options = [...document.querySelectorAll('input[type=radio][name="' + e.name + '"]')].map(r => (r.labels && r.labels[0] ? r.labels[0].innerText : r.value).trim());
     out.push({ id, kind: e.tagName === 'SELECT' ? 'select' : e.tagName === 'TEXTAREA' ? 'textarea' : t,
       label: label(e).replace(/[\u2731*\u2217]/g, '').replace(/\s+/g, ' ').trim().slice(0, 300), name: e.name || '', dom_id: e.id || '', required: e.required || e.getAttribute('aria-required') === 'true',
-      options, current: (e.value || '').slice(0, 100), placeholder: e.placeholder || '' });
+      group: groupOf(e), options, current: (e.value || '').slice(0, 100), placeholder: e.placeholder || '' });
   });
   return out; }"""
 
 
 class Field(BaseModel):
-    id: str; frame: int = 0; kind: str; label: str = ""; name: str = ""; dom_id: str = ""; required: bool = False
+    id: str; frame: int = 0; kind: str; label: str = ""; name: str = ""; dom_id: str = ""; group: str = ""; required: bool = False
     options: list[str] = []; current: str = ""; placeholder: str = ""
 
 

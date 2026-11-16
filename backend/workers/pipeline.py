@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from config.settings import get_settings, ARTIFACTS_DIR
 from config.profile import load_profile, load_resume
-from db import Job, SessionLocal, log
+from db import utcnow, Job, SessionLocal, log
 from scraper.dedupe import save_if_new
 from scraper.ats import fetch_watchlist
 from scraper.boards import BOARDS
@@ -72,7 +72,7 @@ async def apply_job(job_id: str, jd: dict) -> None:
                                  screenshot_to=ARTIFACTS_DIR / job_id / "filled_form.png")
     action = decide(res)
     if action == "submit":
-        await submit(page); _set(job_id, status="applied", applied_at=datetime.utcnow()); await ctx.close(); await pw.stop()
+        await submit(page); _set(job_id, status="applied", applied_at=utcnow()); await ctx.close(); await pw.stop()
     else:
         pending[job_id] = (pw, ctx, page)
         note = ("" if res.ready else f"needs human: blockers={res.blockers} fields={res.needs_human}")
@@ -84,7 +84,7 @@ async def approve(job_id: str) -> bool:
     if not entry: return False
     pw, ctx, page = entry
     try:
-        await submit(page); _set(job_id, status="applied", applied_at=datetime.utcnow(), error="")
+        await submit(page); _set(job_id, status="applied", applied_at=utcnow(), error="")
     except Exception as e: _set(job_id, status="failed", error=str(e)[:500])
     finally: await ctx.close(); await pw.stop()
     await notion.sync_job(job_id); return True
