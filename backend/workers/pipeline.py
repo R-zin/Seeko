@@ -1,6 +1,6 @@
 """Orchestrates discovery -> score -> tailor -> apply. DB-backed state; resumes after restart."""
 from __future__ import annotations
-import asyncio, json
+import asyncio, json, time
 from datetime import datetime
 from pathlib import Path
 from config.settings import get_settings, ARTIFACTS_DIR
@@ -16,7 +16,7 @@ from applier.gate import decide, pending
 from scraper.browser import open_context
 from . import notion_service as notion
 
-state = {"paused": False, "running": False, "task": None}
+state = {"paused": False, "running": False, "task": None, "last_discovery": 0.0}
 
 
 def _set(job_id: str, **kw) -> None:
@@ -128,12 +128,19 @@ async def shutdown() -> None:
         except Exception: pass
 
 
+def discovery_due(now: float | None = None) -> bool:
+    n = get_settings().discovery_interval_min
+    return n > 0 and (now or time.time()) - state["last_discovery"] >= n * 60
+
+
 async def loop() -> None:
     """Background worker: process one job at a time while not paused. Never dies on a single bad job."""
     state["running"] = True
     while state["running"]:
         try:
             if not state["paused"]:
+                if discovery_due():
+                    state["last_discovery"] = time.time(); await discover()
                 with SessionLocal() as s:
                     j = s.query(Job).filter(Job.status.in_(["scraped", "scored", "tailoring", "tailored"])).order_by(Job.discovered_at).first()
                     jid = j.id if j else None

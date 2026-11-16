@@ -14,9 +14,10 @@ export default function Tracker() {
   return (
     <div className="space-y-4">
       {s && <Card title="Application controls">
-        <div className="grid items-end gap-3 sm:grid-cols-4">
+        <div className="grid items-end gap-3 sm:grid-cols-5">
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!s.approval_mode} onChange={e => setS({ ...s, approval_mode: !e.target.checked })} />Full-auto mode (off = approval gate)</label>
           <Field label="Daily submit cap"><input type="number" className={inputCls} value={s.daily_apply_cap} onChange={e => setS({ ...s, daily_apply_cap: +e.target.value })} /></Field>
+          <Field label="Auto-discovery every N min (0 = manual)"><input type="number" min={0} className={inputCls} value={s.discovery_interval_min} onChange={e => setS({ ...s, discovery_interval_min: +e.target.value })} /></Field>
           <Field label="Min match score"><input type="number" className={inputCls} value={s.min_match_score} onChange={e => setS({ ...s, min_match_score: +e.target.value })} /></Field>
           <button className={btn2Cls} onClick={() => a.run(async () => { await api('/settings', { method: 'PUT', json: s }); return 'Saved' })}>Save</button>
         </div>

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
 
     approval_mode: bool = True          # approval gate by default
     daily_apply_cap: int = 10
+    discovery_interval_min: int = 0     # 0 = manual only
     min_match_score: int = 60
     enabled_sources: list[str] = Field(default_factory=lambda: ["watchlist"])
     database_url: str = f"sqlite:///{ROOT / 'data' / 'seeko.db'}"

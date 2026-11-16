@@ -7,6 +7,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
   const [d, setD] = useState<JobDetail | null>(null); const a = useAction()
   useEffect(() => { setD(null); api(`/jobs/${id}`).then(setD) }, [id])
   if (!d) return <p className="text-sm text-slate-500">Loading…</p>
+  const cl = useAction()
   const act = (what: 'approve' | 'skip') => a.run(async () => { await api(`/pipeline/jobs/${id}/${what}`, { method: 'POST' }); onChange(); return what === 'approve' ? 'Submitted' : 'Skipped' })
   return (
     <div className="space-y-3">
@@ -19,6 +20,11 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
         </div>
       </div>
       <Msg m={a.msg} />
+      <div className="space-y-2">
+        <button className={btn2Cls} disabled={cl.busy} onClick={() => cl.run(async () => { const r = await api(`/jobs/${id}/cover-letter`, { method: 'POST' }); setD({ ...d, cover_letter: r.letter }); return 'Cover letter generated' })}>{cl.busy ? 'Writing…' : d.cover_letter ? 'Regenerate cover letter' : 'Generate cover letter'}</button>
+        <Msg m={cl.msg} />
+        {d.cover_letter && <textarea readOnly className="w-full rounded border border-slate-200 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-900" rows={8} value={d.cover_letter} />}
+      </div>
       {d.error && <p className="rounded bg-orange-50 p-2 text-xs text-orange-800 dark:bg-orange-950 dark:text-orange-300">{d.error}</p>}
       {!d.tailored_ok && d.tailored_summary && <p className="text-xs text-amber-700">Tailoring was rejected by safety checks — the untailored base resume is used.</p>}
       <p className="text-sm"><b>Tailoring summary:</b> {d.tailored_summary || '—'}</p>

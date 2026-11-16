@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from config.settings import ARTIFACTS_DIR
 from db import Job, SessionLocal
+from tailor.cover_letter import generate_cover_letter
 
 router = APIRouter(prefix="/api/jobs")
 
@@ -33,7 +34,7 @@ def detail(job_id: str):
         d = ser(j); a = ARTIFACTS_DIR / job_id
         rd = lambda n: (a / n).read_text() if (a / n).exists() else ""
         return d | {"diff": rd("resume.diff"), "base_tex": rd("base_resume.tex"), "tailored_tex": rd("tailored_resume.tex"),
-                    "has_pdf": (a / "tailored_resume.pdf").exists(), "has_screenshot": (a / "filled_form.png").exists(), "jd_text": j.jd_text}
+                    "has_pdf": (a / "tailored_resume.pdf").exists(), "has_screenshot": (a / "filled_form.png").exists(), "cover_letter": rd("cover_letter.txt"), "jd_text": j.jd_text}
 
 
 @router.get("/{job_id}/pdf")
@@ -48,3 +49,12 @@ def shot(job_id: str):
     p = ARTIFACTS_DIR / job_id / "filled_form.png"
     if not p.exists(): raise HTTPException(404)
     return FileResponse(p, media_type="image/png")
+
+
+@router.post("/{job_id}/cover-letter")
+async def cover_letter(job_id: str):
+    with SessionLocal() as s:
+        j = s.get(Job, job_id)
+        if not j: raise HTTPException(404)
+        title, company, jd = j.title, j.company, j.jd_text
+    return {"letter": await generate_cover_letter(job_id, title, company, jd)}
