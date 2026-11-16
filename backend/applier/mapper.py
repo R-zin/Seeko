@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from config.profile import CandidateProfile
 from llm.client import LLMClient
 from llm.structured import complete_json
+from resume.texparse import plain_text
 from .extract import Field
 
 
@@ -31,5 +32,5 @@ async def map_fields(fields: list[Field], profile: CandidateProfile, resume_tex:
     llm = llm or LLMClient.from_settings(task="applier")
     fs = [f.model_dump() for f in fields if f.kind != "file"]
     user = (f"JOB: {job_title} at {company}\nJD (truncated):\n{jd_text[:3000]}\n\nPROFILE:\n{profile.model_dump_json()}\n\n"
-            f"RESUME:\n{resume_tex[:6000]}\n\nFIELDS:\n{fs}")
+            f"RESUME:\n{plain_text(resume_tex)[:6000]}\n\nFIELDS:\n{fs}")
     return await complete_json(llm, FieldMap, [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}])

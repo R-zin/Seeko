@@ -34,7 +34,7 @@ def detail(job_id: str):
         d = ser(j); a = ARTIFACTS_DIR / job_id
         rd = lambda n: (a / n).read_text() if (a / n).exists() else ""
         return d | {"diff": rd("resume.diff"), "base_tex": rd("base_resume.tex"), "tailored_tex": rd("tailored_resume.tex"),
-                    "has_pdf": (a / "tailored_resume.pdf").exists(), "has_screenshot": (a / "filled_form.png").exists(), "cover_letter": rd("cover_letter.txt"), "jd_text": j.jd_text}
+                    "has_pdf": (a / "tailored_resume.pdf").exists(), "has_screenshot": (a / "filled_form.png").exists(), "cover_letter": rd("cover_letter.txt"), "tailor_report": json.loads(rd("tailor_report.json") or "null"), "jd_text": j.jd_text}
 
 
 @router.get("/{job_id}/pdf")

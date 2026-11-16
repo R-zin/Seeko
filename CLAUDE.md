@@ -15,8 +15,20 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 - `config/` env settings (runtime-editable via UI), `CandidateProfile`, `base_resume.tex` in `data/`.
 - `scraper/` `ats.py` (Greenhouse/Lever/Ashby/Workday JSON), `boards.py` (LinkedIn/Indeed/Glassdoor, persistent Playwright profile in `browser_data/`),
   `dedupe.py` (normalized company|title + canonical URL, unique indexes), `scorer.py`.
-- `tailor/` `tailor_resume`: LLM edit -> `validate()` guards (preamble/sections/dates/new proper nouns) -> tectonic/pdflatex compile ->
-  pypdf page count -> up to 2 repair passes -> fallback to base PDF (`fell_back`).
+- `resume/` base-résumé ingestion + compile pipeline:
+  - `texparse.py` parses .tex into sections and *editable segments* (summary / skills lines / Experience+Project bullets,
+    incl. one-arg `\…Item{}` macros). Spans are offsets, so `apply_edits` leaves everything else byte-identical.
+    Also: unsafe-command detection (`\write18`, absolute/`..` paths), missing-asset report, `plain_text()` for prompts.
+  - `pdfparse.py` PDF → structured résumé → clean LaTeX (deterministic, text-layer only; rejects scanned PDFs).
+    Layout mode pads word gaps to 2–3 spaces, so only 6+ spaces count as a column break.
+  - `ingest.py` .tex / .pdf / Overleaf .zip (safe extraction, `\input` flattening). Uploads are drafts in
+    `data/resume_staging/`; `save_base()` promotes them. Never overwrite the base on upload.
+  - `compiler.py` preflight → engine chain (tectonic → pdflatex → xelatex; falls through only on infra errors) →
+    isolated temp dir, `-no-shell-escape`, process-group kill on timeout, content-addressed cache, parsed errors with line numbers.
+- `tailor/` `tailor_resume`: model returns per-segment edits → each checked by `check_edit` (no new numbers / terms /
+  commands, brace shape, skills set unchanged, ≤ +25 % length) → compile; errors revert only the segment on the error line;
+  overflow → one condense pass, then revert the biggest-growth edits. `validate()` is the final whole-doc guard.
+  Writes `artifacts/{id}/tailor_report.json` (accepted / rejected / reverted with reasons).
 - `applier/` `extract.py` tags controls with `data-seeko-id`; `mapper.py` LLM maps fields (null = unknown); `engine.py` fills,
   never submits except `submit()`; `gate.py` decides review/submit/paused; open pages for review live in `gate.pending`.
 - `mcp_notion/` stdio client to `npx -y @notionhq/notion-mcp-server`; tool names are discovered at runtime (`find_tool`).
@@ -25,7 +37,8 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 
 ## Conventions / invariants
 - Approval gate is the default; full-auto is opt-in, capped daily, and must pause on CAPTCHA/2FA/unknown required fields.
-- Never fabricate resume content: tailoring may only rephrase existing facts. Keep the guards in `tailor/tailor.py:validate` strict.
+- Never fabricate resume content: tailoring may only rephrase existing facts. Keep `tailor/tailor.py:check_edit` and `validate` strict;
+  every new guard needs a test that fails without it (see `tests/test_tailor.py`, `tests/test_resume.py`).
 - `mcp` is pinned `<2` (v2 renamed APIs). Tests with Playwright/tectonic need Chromium + tectonic installed; first tectonic run downloads its bundle.
 - Board scraper selectors drift; keep them isolated in `scraper/boards.py`. Tests use fixtures/mocks, never live sites.
 - Runtime data (`data/`, `artifacts/`, `browser_data/`, `.env`) is gitignored.

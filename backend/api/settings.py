@@ -1,9 +1,8 @@
 from __future__ import annotations
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
-from config.settings import get_settings, update_settings, DATA_DIR
-from config.profile import CandidateProfile, load_profile, save_profile, load_resume, RESUME_PATH
-from tailor.latex import compile_tex
+from config.settings import get_settings, update_settings
+from config.profile import CandidateProfile, load_profile, save_profile
 
 router = APIRouter(prefix="/api")
 
@@ -33,16 +32,3 @@ def get_profile(): return load_profile()
 
 @router.put("/profile")
 def put_profile(p: CandidateProfile): save_profile(p); return {"ok": True}
-
-
-@router.get("/resume")
-def get_resume(): return {"tex": load_resume()}
-
-
-@router.put("/resume")
-async def put_resume(file: UploadFile | None = File(None), tex: str | None = None):
-    src = (await file.read()).decode() if file else tex
-    if not src: raise HTTPException(400, "no resume provided")
-    ok, log = await compile_tex(src, DATA_DIR / "base_resume.pdf")
-    if not ok: raise HTTPException(422, f"resume does not compile: {log[-600:]}")
-    DATA_DIR.mkdir(exist_ok=True); RESUME_PATH.write_text(src); return {"ok": True}

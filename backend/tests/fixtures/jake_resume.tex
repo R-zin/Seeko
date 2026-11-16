@@ -1,0 +1,42 @@
+\documentclass[letterpaper,11pt]{article}
+\usepackage[margin=0.7in]{geometry}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\pagestyle{empty}
+% Jake's-template style macros
+\newcommand{\resumeItem}[1]{\item\small{#1 \vspace{-2pt}}}
+\newcommand{\resumeSubheading}[4]{\item \textbf{#1} \hfill #2 \\ \textit{\small #3} \hfill \textit{\small #4}}
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+\begin{document}
+\begin{center}
+{\Huge \textbf{Sam Lee}} \\ \href{mailto:sam@example.com}{sam@example.com} $|$ \href{https://github.com/samlee}{github.com/samlee}
+\end{center}
+
+\section{Experience}
+\resumeSubHeadingListStart
+  \resumeSubheading{Globex}{Jun 2022 -- Present}{Software Engineer}{Remote}
+  \resumeItemListStart
+    \resumeItem{Designed a Go service handling 20k events/sec on Kafka} % keep this metric
+    \resumeItem{Migrated CI from Jenkins to GitHub Actions, cutting build time 35\%}
+  \resumeItemListEnd
+\resumeSubHeadingListEnd
+
+\section{Projects}
+\resumeSubHeadingListStart
+  \resumeSubheading{Tracebin}{2021}{Open source}{}
+  \resumeItemListStart
+    \resumeItem{Built a log search tool in Rust with a React front end}
+  \resumeItemListEnd
+\resumeSubHeadingListEnd
+
+\section{Technical Skills}
+\begin{itemize}[leftmargin=0.15in, label={}]
+  \small{\item{
+    \textbf{Languages}{: Go, Rust, Python, TypeScript} \\
+    \textbf{Tools}{: Kafka, Docker, GitHub Actions, Jenkins}
+  }}
+\end{itemize}
+\end{document}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import ReactDiffViewer from 'react-diff-viewer-continued'
-import { api, type Job, type JobDetail } from '../api'
+import { api, type Job, type JobDetail, type TailorReport } from '../api'
 import { Badge, Figure, Kicker, Msg, btn2Cls, btnAccentCls, btnCls, linkBtnCls, pad, useAction, useDark } from '../ui'
 
 const FILTERS = [
@@ -37,6 +37,28 @@ function useDiffStyles() {
       line: { borderBottom: `1px solid ${v('#1f1f1c', '#e2dfd6')}` },
     },
   }
+}
+
+function TailorAudit({ r }: { r: TailorReport }) {
+  const n = (x: number, w: string) => `${x} ${w}${x === 1 ? '' : 's'}`
+  return (
+    <details className="mt-5 border-t border-hair pt-3">
+      <summary className="cursor-pointer text-[13px] text-ink-2">
+        <span className="font-semibold text-ink">{n(r.accepted.length, 'edit')}</span> applied of {r.segments} editable ·{' '}
+        <span className={r.rejected.length ? 'text-warn' : ''}>{r.rejected.length} rejected</span> ·{' '}
+        <span className={r.reverted.length ? 'text-warn' : ''}>{r.reverted.length} reverted</span>
+        {r.pages != null && <> · {r.pages}/{r.base_pages} page</>}
+      </summary>
+      {r.fallback && <p className="mt-3 text-[13px] text-accent">{r.fallback}</p>}
+      {r.rejected.length + r.reverted.length > 0 && (
+        <ul className="mt-3 space-y-2 text-[13px]">
+          {r.rejected.map((x, i) => <li key={'r' + i}><span className="font-mono text-[11px] text-warn">{x.id} rejected</span> <span className="text-ink-2">{x.reason}</span></li>)}
+          {r.reverted.map((x, i) => <li key={'v' + i}><span className="font-mono text-[11px] text-warn">{x.id} reverted</span> <span className="text-ink-2">{x.reason}</span></li>)}
+        </ul>
+      )}
+      <p className="mt-3 text-[12px] text-mute">Every edit is checked on its own: no new numbers, tools or names; skills may only be re-ordered; LaTeX must compile and fit the original page count.</p>
+    </details>
+  )
 }
 
 function Review({ id, onChange }: { id: string; onChange: () => void }) {
@@ -91,6 +113,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
           <Kicker>What changed</Kicker>
           <p className="mt-2 text-[19px] leading-[1.45] tracking-[-0.005em]">{d.tailored_summary || <span className="text-mute">Not tailored yet.</span>}</p>
           {!d.tailored_ok && d.tailored_summary && <p className="mt-2 text-[13px] text-accent">Rejected by the safety checks — your untailored résumé is used.</p>}
+          {d.tailor_report && <TailorAudit r={d.tailor_report} />}
         </div>
         <div className="col-span-12 md:col-span-5">
           <Kicker>Missing from your résumé</Kicker>

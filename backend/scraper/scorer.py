@@ -1,5 +1,6 @@
 from __future__ import annotations
 from config.profile import load_resume
+from resume.texparse import plain_text
 from llm.client import LLMClient
 from llm.structured import complete_json
 from schemas import Score
@@ -14,4 +15,4 @@ async def score_job(jd_text: str, title: str, company: str, resume: str | None =
     resume = resume if resume is not None else load_resume()
     return await complete_json(llm, Score, [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": f"JOB: {title} at {company}\n\nJD:\n{jd_text[:6000]}\n\nRESUME (.tex):\n{resume[:8000]}"}])
+        {"role": "user", "content": f"JOB: {title} at {company}\n\nJD:\n{jd_text[:6000]}\n\nRESUME:\n{plain_text(resume)[:8000]}"}])

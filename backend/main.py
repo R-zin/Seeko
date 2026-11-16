@@ -29,7 +29,7 @@ def health(): return {"ok": True}
 
 # routers added as modules land (see register() calls below)
 def _register():
-    for name in ("settings", "jobs", "pipeline", "notion", "logs"):
+    for name in ("settings", "resume", "jobs", "pipeline", "notion", "logs"):
         try:
             mod = __import__(f"api.{name}", fromlist=["router"])
             app.include_router(mod.router)

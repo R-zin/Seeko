@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import { Check, Field, Kicker, Msg, Section, areaCls, btn2Cls, btnCls, inputCls, linkBtnCls, monoAreaCls, useAction } from '../ui'
+import { ResumeSection } from '../resume'
+import { Check, Field, Kicker, Msg, Section, areaCls, btn2Cls, btnCls, inputCls, linkBtnCls, useAction } from '../ui'
 
 /** Comma-separated list input that keeps the raw text while typing (commas would otherwise vanish). */
 function ListInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -67,39 +68,6 @@ function ModelSection() {
               </tr>))}</tbody>
           </table>
         )}
-      </>}
-    </Section>
-  )
-}
-
-/* 02 — Résumé ------------------------------------------------------------ */
-function ResumeSection() {
-  const [tex, setTex] = useState<string | null>(null)
-  const [saved, setSaved] = useState('')
-  const a = useAction()
-  useEffect(() => { api('/resume').then(r => { setTex(r.tex); setSaved(r.tex) }) }, [])
-  const dirty = tex !== null && tex !== saved
-  const lines = tex ? tex.split('\n').length : 0
-
-  return (
-    <Section n="02" title="Résumé" note={<>Your base <span className="font-mono text-[12.5px]">.tex</span>. It must compile. Tailoring may only rephrase what is here — never add employers, dates or tools.</>}>
-      {tex === null ? <Skeleton /> : <>
-        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
-          <label className={linkBtnCls + ' cursor-pointer'}>
-            Upload .tex file
-            <input type="file" accept=".tex,text/x-tex" className="sr-only" onChange={async e => { const f = e.target.files?.[0]; if (f) setTex(await f.text()) }} />
-          </label>
-          <span className="font-mono text-[11px] text-mute">{lines} lines{dirty && <span className="text-accent"> · unsaved</span>}</span>
-        </div>
-        <textarea aria-label="LaTeX source" className={monoAreaCls} rows={18} spellCheck={false} value={tex} onChange={e => setTex(e.target.value)}
-          placeholder={'\\documentclass{article}\n\\begin{document}\n…\n\\end{document}'} />
-        <div className="mt-5 flex gap-3">
-          <button className={btnCls} disabled={a.busy || !tex} onClick={() => a.run(async () => {
-            const f = new FormData(); f.append('file', new Blob([tex]), 'base_resume.tex')
-            await api('/resume', { method: 'PUT', body: f }); setSaved(tex); return 'Saved — it compiles.'
-          })}>{a.busy ? 'Compiling…' : 'Save & compile'}</button>
-        </div>
-        <Msg m={a.msg} />
       </>}
     </Section>
   )

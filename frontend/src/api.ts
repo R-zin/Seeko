@@ -18,4 +18,12 @@ export interface Job {
   is_easy_apply: boolean; status: string; score: number | null; tailored_summary: string
   tailored_ok: boolean; error: string; notion_page_id: string; missing_keywords: string[]; discovered_at: string; applied_at: string | null
 }
-export interface JobDetail extends Job { diff: string; base_tex: string; tailored_tex: string; has_pdf: boolean; has_screenshot: boolean; cover_letter: string; jd_text: string }
+export interface JobDetail extends Job { diff: string; base_tex: string; tailored_tex: string; has_pdf: boolean; has_screenshot: boolean; cover_letter: string; jd_text: string; tailor_report: TailorReport | null }
+
+export interface TailorReport {
+  segments: number; base_pages: number; pages?: number; engine?: string; fallback?: string
+  accepted: { id: string; section: string; kind: string; before: string; after: string }[]
+  rejected: { id: string; section?: string; reason: string; proposed?: string }[]
+  reverted: { id: string; reason: string }[]
+  passes: { pass: string; proposed?: number; accepted?: number; error?: string }[]
+}
