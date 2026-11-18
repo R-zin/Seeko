@@ -82,7 +82,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
   return (
     <article>
       {/* Headline */}
-      <Kicker>{d.company} — {d.source}{d.location ? ` — ${d.location}` : ''}</Kicker>
+      <Kicker>{d.job_type === 'internship' ? 'Internship — ' : ''}{d.company} — {d.source}{d.location ? ` — ${d.location}` : ''}{d.is_remote ? ' — remote' : ''}</Kicker>
       <h2 className="mt-3 text-[clamp(32px,4.2vw,56px)] font-bold leading-[0.98] tracking-[-0.035em]">{d.title}</h2>
       <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
         <Badge s={d.status} />
@@ -154,6 +154,20 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
         </figure>
       )}
 
+      {/* Job description, as saved when the posting was found */}
+      <details className="mt-12 border-t border-ink pt-2" open={!d.tailored_tex}>
+        <summary className="flex cursor-pointer flex-wrap items-baseline justify-between gap-3 pb-2">
+          <Kicker>Job description</Kicker>
+          <span className="font-mono text-[11px] text-mute">
+            {d.jd_text ? `${d.jd_text.length.toLocaleString()} chars` : 'not captured'}{d.jd_source ? ` · via ${d.jd_source}` : ''}
+            {d.posted_at ? ` · posted ${d.posted_at.slice(0, 10)}` : ''} · seen {d.times_seen}×
+          </span>
+        </summary>
+        {d.jd_text
+          ? <div className="max-h-[520px] max-w-[72ch] overflow-auto whitespace-pre-wrap pr-2 text-[15px] leading-[1.65] text-ink-2">{d.jd_text}</div>
+          : <p className="text-[14px] text-mute">The page had no readable description.</p>}
+      </details>
+
       {/* Cover letter */}
       <section className="mt-12">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3 border-b border-ink pb-2">
@@ -194,7 +208,7 @@ export default function Pipeline() {
     <div>
       {/* Figures */}
       <div className="grid grid-cols-2 gap-x-6 gap-y-8 md:grid-cols-4">
-        <Figure value={pad(jobs.length)} label="Jobs discovered" />
+        <Figure value={pad(jobs.length)} label={`Found · ${jobs.filter(j => j.job_type === 'internship').length} internships`} />
         <Figure value={pad(review.length)} label="Awaiting your review" accent={review.length > 0} />
         <Figure value={pad(jobs.filter(j => ['applied'].includes(j.status)).length)} label="Applied, all time" />
         <Figure value={<>{st?.applied_today ?? 0}<span className="text-mute">/{st?.daily_cap ?? '—'}</span></>} label="Submitted today / cap" />
@@ -202,7 +216,7 @@ export default function Pipeline() {
 
       {/* Controls */}
       <div className="mt-10 flex flex-wrap items-center gap-3 border-t-2 border-rule pt-4">
-        <button className={btnCls} disabled={a.busy} onClick={() => a.run(async () => { await api('/pipeline/discover', { method: 'POST' }); setTimeout(load, 1500); return 'Discovery started — new jobs appear below as they are found.' })}>Run discovery</button>
+        <button className={btnCls} disabled={a.busy} onClick={() => a.run(async () => { await api('/pipeline/discover', { method: 'POST' }); setTimeout(load, 1500); return 'Search started — new jobs and internships appear below once it finishes. Progress is under Tracker → Searches.' })}>{st?.searching ? 'Searching…' : 'Run discovery'}</button>
         <button className={btn2Cls} onClick={() => api(`/pipeline/${st?.paused ? 'resume' : 'pause'}`, { method: 'POST' }).then(load)}>{st?.paused ? 'Resume worker' : 'Pause worker'}</button>
         <span className="ml-auto text-[13px] text-mute">
           Mode: <span className={`font-semibold ${st && !st.approval_mode ? 'text-accent' : 'text-ink'}`}>{!st ? '—' : st.approval_mode ? 'Approval gate' : 'Full-auto'}</span>
@@ -236,7 +250,7 @@ export default function Pipeline() {
                     <span className={`pt-0.5 font-mono text-[11px] ${on ? 'text-accent' : 'text-mute'}`}>{pad(jobs.indexOf(j) + 1, 3)}</span>
                     <span className="min-w-0">
                       <span className="block truncate text-[15px] font-semibold leading-tight tracking-[-0.01em]">{j.title}</span>
-                      <span className={`mt-1 block truncate text-[12.5px] ${on ? 'text-paper/70' : 'text-mute'}`}>{j.company} · {j.source}{j.is_easy_apply ? ' · easy apply' : ''}</span>
+                      <span className={`mt-1 block truncate text-[12.5px] ${on ? 'text-paper/70' : 'text-mute'}`}>{j.job_type === 'internship' && <span className={`font-semibold uppercase tracking-[0.08em] ${on ? 'text-paper' : 'text-ink'}`}>Internship · </span>}{j.company} · {j.source}{j.is_easy_apply ? ' · easy apply' : ''}</span>
                       <span className="mt-2 block">{on ? <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-paper/80">{j.status.replace('_', ' ')}</span> : <Badge s={j.status} />}</span>
                     </span>
                     <span className={`text-right text-[26px] font-bold leading-none tracking-[-0.03em] tabular-nums ${j.score == null ? 'opacity-30' : ''}`}>{j.score ?? '—'}</span>

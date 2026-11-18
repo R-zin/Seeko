@@ -24,7 +24,9 @@ class Search(BaseModel):
     remote_only: bool = False
     excluded_companies: list[str] = Field(default_factory=list)
     min_match_score: int = 60
-    watchlist_urls: list[str] = Field(default_factory=list)
+    watchlist_urls: list[str] = Field(default_factory=list)   # ATS boards (API) or any careers page (browsed)
+    job_types: list[str] = Field(default_factory=lambda: ["job", "internship"])
+    max_age_days: int = 30      # skip postings older than this when the page states a date; 0 = no limit
 
 
 class CandidateProfile(BaseModel):

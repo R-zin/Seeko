@@ -6,9 +6,6 @@ from pathlib import Path
 from config.settings import get_settings, ARTIFACTS_DIR
 from config.profile import load_profile, load_resume
 from db import utcnow, Job, SessionLocal, log
-from scraper.dedupe import save_if_new
-from scraper.ats import fetch_watchlist
-from scraper.boards import BOARDS
 from scraper.scorer import score_job
 from tailor.tailor import tailor_resume
 from applier.engine import fill_application, submit
@@ -27,19 +24,15 @@ def _set(job_id: str, **kw) -> None:
         s.commit()
 
 
-async def discover() -> int:
-    st, prof = get_settings(), load_profile()
-    found = await fetch_watchlist(prof.search.watchlist_urls) if "watchlist" in st.enabled_sources or prof.search.watchlist_urls else []
-    for name, cls in BOARDS.items():
-        if name in st.enabled_sources:
-            try: found += await cls().search(prof.search.role_titles, prof.search.locations, 15)
-            except Exception as e: log(f"{name} scrape failed: {e}", "error")
-    excl = {c.lower() for c in prof.search.excluded_companies}
-    new = 0
-    for p in found:
-        if p.company.lower() in excl: continue
-        if (job := save_if_new(p)): new += 1; asyncio.create_task(notion.sync_job(job.id))
-    log(f"discovery: {len(found)} found, {new} new"); return new
+async def discover(trigger: str = "manual") -> int:
+    """Run the LangGraph job search (jobsearch/graph.py); new jobs land as status 'scraped' for this worker."""
+    from jobsearch.service import RunInProgress, run_search
+    try:
+        res = await run_search(trigger=trigger)
+    except RunInProgress:
+        log("discovery skipped: a job search is already running", "warn"); return 0
+    for jid in res["new_job_ids"]: asyncio.create_task(notion.sync_job(jid))
+    return len(res["new_job_ids"])
 
 
 async def process_job(job_id: str) -> None:
@@ -153,7 +146,7 @@ async def loop() -> None:
         try:
             if not state["paused"]:
                 if discovery_due():
-                    state["last_discovery"] = time.time(); await discover()
+                    state["last_discovery"] = time.time(); await discover("schedule")
                 jid = None
                 if llm_configured():
                     with SessionLocal() as s:

@@ -30,7 +30,21 @@ class Settings(BaseSettings):
     discovery_interval_min: int = 0     # 0 = manual only
     min_match_score: int = 60
     enabled_sources: list[str] = Field(default_factory=lambda: ["watchlist"])
-    database_url: str = f"sqlite:///{ROOT / 'data' / 'seeko.db'}"
+    # Any SQLAlchemy URL (postgresql://… recommended). Empty = embedded PostgreSQL in data/postgres.
+    # Deployment config: read from env/.env only, never from the UI overrides file.
+    database_url: str = ""
+
+    # Job search (LangGraph). Defaults are deliberately polite: few pages, jittered delays, bounded detail visits.
+    search_max_queries: int = 6         # per board, per run (titles x locations x job types)
+    search_max_pages: int = 3           # listing pages per query / careers page
+    search_max_details: int = 25        # detail pages opened per source per run; the rest wait for the next run
+    search_delay_min_s: float = 3.0
+    search_delay_max_s: float = 8.0
+    search_revisit_days: int = 14       # a page rejected after reading is not re-read for this long
+    search_respect_robots: bool = True  # careers pages: obey robots.txt
+    search_llm_review: bool = True      # LLM double-checks pages that had no structured job data
+    search_headless: bool = True
+    indeed_host: str = "www.indeed.com"   # country site, e.g. in.indeed.com, uk.indeed.com
 
     def extra_headers(self) -> dict[str, str]:
         if not self.llm_extra_headers.strip():
@@ -43,13 +57,16 @@ class Settings(BaseSettings):
 
 
 OVERRIDES = DATA_DIR / "settings.json"   # UI edits persist here (git-ignored; holds secrets, chmod 600)
+ENV_ONLY = {"database_url"}               # older settings.json files pinned the SQLite path; ignore it
 
 
 def _load() -> Settings:
     base = Settings()
     if OVERRIDES.exists():
-        try: return base.model_copy(update=json.loads(OVERRIDES.read_text()))
-        except (json.JSONDecodeError, OSError): pass
+        try:
+            data = {k: v for k, v in json.loads(OVERRIDES.read_text()).items() if k not in ENV_ONLY}
+            return base.model_copy(update=data)
+        except (json.JSONDecodeError, OSError, AttributeError): pass
     return base
 
 
@@ -65,5 +82,5 @@ def update_settings(**kw) -> Settings:
     _settings = _settings.model_copy(update={k: v for k, v in kw.items() if v is not None})
     if os.environ.get("SEEKO_NO_PERSIST") != "1":
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        OVERRIDES.write_text(_settings.model_dump_json()); os.chmod(OVERRIDES, 0o600)
+        OVERRIDES.write_text(_settings.model_dump_json(exclude=ENV_ONLY)); os.chmod(OVERRIDES, 0o600)
     return _settings

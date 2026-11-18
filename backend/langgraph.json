@@ -1,0 +1,6 @@
+{
+  "python_version": "3.12",
+  "dependencies": ["."],
+  "graphs": {"job_search": "./jobsearch/app.py:graph"},
+  "env": "../.env"
+}

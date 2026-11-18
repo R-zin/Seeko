@@ -8,6 +8,13 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      postgres:   # the job search store; tests use their own schemas (TEST_DATABASE_URL)
+        image: postgres:16
+        env: { POSTGRES_USER: seeko, POSTGRES_PASSWORD: seeko, POSTGRES_DB: seeko_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U seeko -d seeko_test" --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -35,7 +42,9 @@ jobs:
           cd /tmp && tectonic w.tex
       - name: Tests
         working-directory: backend
-        run: .venv/bin/python -m pytest -q
+        env:
+          TEST_DATABASE_URL: postgresql://seeko:seeko@localhost:5432/seeko_test
+        run: .venv/bin/python -m pytest -q -rs
 
   frontend:
     runs-on: ubuntu-latest

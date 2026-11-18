@@ -18,6 +18,9 @@ class JobPosting(BaseModel):
     jd_text: str = ""
     is_easy_apply: bool = False
     discovered_at: datetime = Field(default_factory=utcnow)
+    employment_type: str = ""            # as published (e.g. "Intern", "FULL_TIME")
+    posted_at: datetime | None = None    # naive UTC
+    is_remote: bool | None = None        # None = the source does not say
 
 
 class Score(BaseModel):

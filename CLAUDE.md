@@ -1,20 +1,33 @@
 # Seeko
 
-Automates job discovery -> LaTeX resume tailoring -> application form filling -> Notion tracking.
+Automates job discovery (LangGraph, PostgreSQL) -> LaTeX resume tailoring -> application form filling -> Notion tracking.
 All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/responses`).
 
 ## Commands
 - Dev (both servers): `./dev.sh`  -> UI :5173 (proxies /api), API :8000
-- Backend tests: `cd backend && .venv/bin/python -m pytest -q`
+- Backend tests: `cd backend && .venv/bin/python -m pytest -q` (PostgreSQL tests use `TEST_DATABASE_URL`, else the embedded server)
+- Job search CLI: `cd backend && .venv/bin/python -m jobsearch --help` (run / runs / run-info / resume / jobs / show / db)
 - Frontend: `cd frontend && npx tsc -b && npx vite build`
 - Toolchain is user-local: `~/.local/bin` (uv, tectonic), `~/.local/node/bin` (node). Python 3.12 venv at `backend/.venv`.
 
 ## Architecture (backend/)
 - `llm/` `LLMClient` (AsyncOpenAI wrapper; `for_task("scoring"|"tailor"|"applier")` overrides model) + `structured.complete_json`
   (json_schema -> json_object -> prompt+regex, 2 repair retries; tier cached per base_url+model). `api/llm.py` has `POST /api/llm/test`.
-- `config/` env settings (runtime-editable via UI), `CandidateProfile`, `base_resume.tex` in `data/`.
-- `scraper/` `ats.py` (Greenhouse/Lever/Ashby/Workday JSON), `boards.py` (LinkedIn/Indeed/Glassdoor, persistent Playwright profile in `browser_data/`),
-  `dedupe.py` (normalized company|title + canonical URL, unique indexes), `scorer.py`.
+- `config/` env settings (runtime-editable via UI), `CandidateProfile`, `base_resume.tex` in `data/`. `database_url` is env-only
+  (ignored in `data/settings.json`).
+- `db.py` models + lazy engine. Empty `DATABASE_URL` = embedded PostgreSQL (`pgserver`, data in `data/postgres`); `postgresql://` URLs use
+  psycopg 3; SQLite still works (tests). Schema = Alembic (`migrations/`), applied by `init_db()`; DBs from the old `create_all()` are
+  stamped at `0001` first. On PostgreSQL an old `data/seeko.db` is imported once (only into an empty DB). New columns/tables need a migration
+  (`tests/test_jobsearch_store.py::test_migrations_match_models` fails otherwise).
+- `jobsearch/` the job search as a LangGraph app: `graph.py` (plan → collect → dedupe → fetch → screen → [review] → persist → finish; collect/fetch
+  fan out per source with `Send`; all I/O behind `Deps` so tests inject fakes), `browse.py` (Playwright `Session`: pacing, robots.txt, block
+  detection, pagination/"Load more", iframe links), `extract.py` (JSON-LD JobPosting → board selector → page text; `detect_block`),
+  `leads.py` (results-page links → leads), `classify.py` (job/internship, title match, location, freshness, `screen`), `store.py`
+  (idempotent writes: ON CONFLICT inserts, sightings unique per run), `service.py` (one run at a time, Postgres checkpointer, resume),
+  `__main__.py` CLI, `app.py` + `langgraph.json` for LangGraph Studio. API: `api/search.py`.
+- `scraper/` `ats.py` (Greenhouse/Lever/Ashby/Workday JSON), `boards.py` (declarative LinkedIn/Indeed/Glassdoor/Internshala configs: search URL,
+  posting-link regex, canonical URL, description selector; persistent Playwright profile in `browser_data/`),
+  `dedupe.py` (normalized company|title + canonical URL, unique indexes), `scorer.py`, `textutil.py` (HTML → structured text).
 - `resume/` base-résumé ingestion + compile pipeline:
   - `texparse.py` parses .tex into sections and *editable segments* (summary / skills lines / Experience+Project bullets,
     incl. one-arg `\…Item{}` macros). Spans are offsets, so `apply_edits` leaves everything else byte-identical.
@@ -32,7 +45,7 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 - `applier/` `extract.py` tags controls with `data-seeko-id`; `mapper.py` LLM maps fields (null = unknown); `engine.py` fills,
   never submits except `submit()`; `gate.py` decides review/submit/paused; open pages for review live in `gate.pending`.
 - `mcp_notion/` stdio client to `npx -y @notionhq/notion-mcp-server`; tool names are discovered at runtime (`find_tool`).
-- `workers/pipeline.py` single background loop; job status: scraped -> scored -> tailoring -> tailored -> applying -> needs_review -> applied/failed/skipped.
+- `workers/pipeline.py` single background loop; `discover()` runs the job search graph; job status: scraped -> scored -> tailoring -> tailored -> applying -> needs_review -> applied/failed/skipped.
   Notion sync (`notion_service.py`) is best-effort: failures leave `notion_dirty=True` and are retried.
 
 ## Conventions / invariants
@@ -41,4 +54,9 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
   every new guard needs a test that fails without it (see `tests/test_tailor.py`, `tests/test_resume.py`).
 - `mcp` is pinned `<2` (v2 renamed APIs). Tests with Playwright/tectonic need Chromium + tectonic installed; first tectonic run downloads its bundle.
 - Board scraper selectors drift; keep them isolated in `scraper/boards.py`. Tests use fixtures/mocks, never live sites.
+- Job search must stay careful: never re-read a known posting (check the DB before opening pages), keep per-source budgets and jittered delays,
+  stop a source at the first CAPTCHA / login wall / 429 (never bypass), obey robots.txt on careers pages. Graph state stays JSON-native
+  (dicts, ISO date strings) so checkpoints serialize. Store writes must stay idempotent (nodes retry, runs resume).
+- Tests never touch the user's DB: `tests/conftest.py` forces a temp SQLite `DATABASE_URL`; PostgreSQL tests use `TEST_DATABASE_URL` or the
+  embedded server, each in its own schema (`migrated` fixture runs a test on both backends).
 - Runtime data (`data/`, `artifacts/`, `browser_data/`, `.env`) is gitignored.
