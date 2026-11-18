@@ -23,6 +23,8 @@ jobs:
         run: |
           uv venv --python 3.12 .venv
           uv pip install -e ".[dev]"
+      - name: Python 3.11 syntax check (pyproject allows >= 3.11; tests run on 3.12)
+        run: uv run --no-project --python 3.11 python -m compileall -q -x '/\.venv/' backend
       - name: Install Chromium for Playwright
         working-directory: backend
         run: .venv/bin/playwright install --with-deps chromium

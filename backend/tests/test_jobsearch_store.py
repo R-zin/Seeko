@@ -207,3 +207,31 @@ def test_progress_and_recent_run_stats(migrated):
     st.finish_run("r1", "done", {"new": 1})
     st.set_progress("r1", {"step": "late"}, {})                                             # ignored once finished
     assert st.get_run("r1")["stats"] == {"new": 1}
+
+
+def test_migrations_round_trip_keeps_data(migrated):
+    """Every downgrade works, and stepping back one revision and forward again keeps the saved jobs."""
+    from alembic import command
+    from sqlalchemy import inspect
+    eng, SL = migrated
+    st = Store(SL)
+    st.start_run("r1", {}, "test")
+    st.persist_run("r1", [posting(1, title="Kept Across Migrations")], [], [])
+    cfg = db.alembic_config()
+
+    def run(fn, rev):
+        with eng.begin() as c:
+            cfg.attributes["connection"] = c
+            fn(cfg, rev)
+
+    run(command.downgrade, "0002")                       # drop closed_at + the full-text index
+    assert "closed_at" not in {c["name"] for c in inspect(eng).get_columns("jobs")}
+    run(command.upgrade, "head")
+    with SL() as s:
+        assert s.scalar(select(Job.title)) == "Kept Across Migrations"
+    run(command.downgrade, "base")                       # all the way down
+    assert not ({"jobs", "logs", "search_runs", "job_sightings", "seen_urls"} & set(inspect(eng).get_table_names()))
+    db.migrate(eng)                                      # and back up from nothing
+    with eng.connect() as c:
+        mc = MigrationContext.configure(c, opts={"compare_type": True, "include_object": db.alembic_include_object})
+        assert compare_metadata(mc, db.Base.metadata) == []

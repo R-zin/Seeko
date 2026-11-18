@@ -293,3 +293,83 @@ async def test_progress_is_written_while_running(migrated):
     names = [p["step"] for p in steps]
     assert names[:2] == ["collecting leads", "collecting leads"] and "reading postings" in names and "screening" in names
     assert steps[-1]["leads"] == 6 and steps[-1]["read"] >= 4
+
+
+ISH = "https://internshala.com"
+ISH_Q = f"{ISH}/internships/keywords-python%20development/"
+
+
+def ish_results(slugs):
+    items = "".join(f'<div class="card"><a href="/internship/detail/{s}?referral=list">Python Development</a></div>' for s in slugs)
+    return f'<html><body><a href="/internships/">All internships</a>{items}</body></html>'
+
+
+def ish_detail(title, locality, remote=False):
+    return ld(title, etype="INTERN", remote=remote, locality=locality)
+
+
+async def test_board_browsing_end_to_end_with_pagination_and_slug_locations(migrated):
+    """A board (Internshala) browsed for real: URL pagination until a page has nothing new, links read from the
+    results page, the city in each posting URL screened before opening it, JSON-LD and selector extraction."""
+    _, SL = migrated
+    pages = {
+        ISH_Q: ish_results(["python-development-internship-in-kochi-at-acme1", "work-from-home-python-development-internship-at-beta2",
+                            "python-development-internship-in-pune-at-gamma3"]),
+        ISH_Q + "page-2/": ish_results(["python-development-internship-in-kochi-at-delta4"]),
+        ISH_Q + "page-3/": ish_results(["python-development-internship-in-kochi-at-delta4"]),      # nothing new: stop
+        f"{ISH}/internship/detail/python-development-internship-in-kochi-at-acme1": ish_detail("Python Development Intern", "Kochi"),
+        f"{ISH}/internship/detail/work-from-home-python-development-internship-at-beta2": ish_detail("Python Development (WFH)", "Remote", remote=True),
+        f"{ISH}/internship/detail/python-development-internship-in-pune-at-gamma3": ish_detail("Python Development Intern", "Pune"),
+        f"{ISH}/internship/detail/python-development-internship-in-kochi-at-delta4": (
+            '<html><body><h1>Python Development</h1><div class="internship_details">' + JD + "</div></body></html>"),
+    }
+    PAGES.update(pages)
+    try:
+        site = Site()
+        spec = SearchSpec(role_titles=["Python Development"], locations=["Kochi", "Remote"], job_types=["internship"],
+                          sources=["internshala"], delay_min_s=0, delay_max_s=0, max_pages=4, llm_review=False)
+        res = await service.run_search(spec, deps=make_deps(SL, site))
+    finally:
+        for k in pages: PAGES.pop(k, None)
+    st = res["stats"]["sources"]["internshala"]
+    assert st["pages"] == 3 and st["skipped_location"] == 1 and st["leads"] == 3 and st["fetched"] == 3
+    assert ISH_Q + "page-4/" not in site.hits                                    # stopped when a page added nothing
+    assert not [u for u in site.hits if "gamma3" in u]                           # Pune posting never opened
+    with SL() as s:
+        jobs = {j.canonical_url.rsplit("/", 1)[-1]: j for j in s.scalars(select(Job))}
+    assert set(jobs) == {"python-development-internship-in-kochi-at-acme1", "work-from-home-python-development-internship-at-beta2",
+                         "python-development-internship-in-kochi-at-delta4"}
+    assert all(j.job_type == "internship" and j.source == "internshala" for j in jobs.values())
+    assert jobs["work-from-home-python-development-internship-at-beta2"].is_remote
+    assert jobs["python-development-internship-in-kochi-at-delta4"].jd_source == "selector"     # no JSON-LD on that page
+
+
+async def test_llm_review_fills_gaps_reclassifies_and_fails_open(migrated, monkeypatch):
+    _, SL = migrated
+
+    async def fake(llm, schema, messages, **kw):
+        return PageReview(is_job_posting=True, matches_search=True, company="Acme Corp", location="Kochi", is_internship=True)
+    monkeypatch.setattr("llm.structured.complete_json", fake)
+    spec = SPEC.model_copy(update={"llm_review": True})
+    await service.run_search(spec, deps=make_deps(SL, Site(), llm=object()))
+    with SL() as s:
+        j = s.scalar(select(Job).where(Job.title == "Backend Platform Engineer"))
+    assert j.company == "Acme" and j.job_type == "internship"          # company kept (page had one); type from the model
+
+    async def down(*a, **k): raise RuntimeError("model unreachable")
+    monkeypatch.setattr("llm.structured.complete_json", down)
+    _, SL2 = migrated
+    with SL2() as s:
+        s.query(Job).delete(); s.commit()
+    res = await service.run_search(spec, deps=make_deps(SL2, Site(), llm=object()))
+    assert res["stats"]["new"] == 3                                     # an LLM outage never drops postings
+
+
+def test_langgraph_studio_entry_point():
+    import json
+    from pathlib import Path
+    cfg = json.loads((Path(__file__).resolve().parents[1] / "langgraph.json").read_text())
+    module, attr = cfg["graphs"]["job_search"].split(":")
+    assert module == "./jobsearch/app.py" and attr == "graph"
+    from jobsearch import app
+    assert {"plan", "collect", "fetch", "persist"} <= set(app.graph.get_graph().nodes)

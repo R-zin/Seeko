@@ -246,6 +246,7 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
         board = BOARDS[task["source"]]
         leads: list[dict] = []
         seen: set[str] = set()
+        visited: set[str] = set()     # boards that ignore a query part (e.g. location) yield the same URL: load it once
         cap = spec.max_details * 3
         async with d.browser(board.source, spec.headless) as ctx:
             sess = Session(ctx, Pacer(spec.delay_min_s, spec.delay_max_s), max_loads=task.get("budget"))
@@ -253,8 +254,9 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
                 for q in task["queries"]:
                     for page_no in range(spec.max_pages):
                         url = board.search_url(q["query"], q["location"], page_no, q["internship"])
-                        if not url:
+                        if not url or url in visited:
                             break
+                        visited.add(url)
                         read = await sess.read_listing(url)
                         if read.exhausted:
                             extra["budget_exhausted"] = True

@@ -59,12 +59,26 @@ function Controls() {
   )
 }
 
+type Sort = { k: SortKey; desc: boolean }
+
+/** Column head; sortable when `k` is given. Module-level so React keeps its identity between renders. */
+function Th({ k, sort, onSort, children, className = '' }: { k?: SortKey; sort: Sort; onSort: (s: Sort) => void; children: React.ReactNode; className?: string }) {
+  return (
+    <th scope="col" className={`py-3 pr-4 font-semibold ${className}`} aria-sort={k && sort.k === k ? (sort.desc ? 'descending' : 'ascending') : undefined}>
+      {k ? <button className="inline-flex items-center gap-1 uppercase tracking-[0.12em] hover:text-ink" onClick={() => onSort({ k, desc: sort.k === k ? !sort.desc : k !== 'company' && k !== 'title' })}>
+        {children}<span className={sort.k === k ? 'text-accent' : 'opacity-0'}>{sort.desc ? '↓' : '↑'}</span></button>
+        : <span className="uppercase tracking-[0.12em]">{children}</span>}
+    </th>
+  )
+}
+
 /* 02 — Register ---------------------------------------------------------- */
 function Register() {
   const [jobs, setJobs] = useState<Job[] | null>(null)
   const [f, setF] = useState({ status: '', source: '', job_type: '', state: '', q: '' })
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString()
-  const [sort, setSort] = useState<{ k: SortKey; desc: boolean }>({ k: 'discovered_at', desc: true })
+  const [sort, setSort] = useState<Sort>({ k: 'discovered_at', desc: true })
+  const th = { sort, onSort: setSort }
 
   useEffect(() => {
     const load = () => api('/jobs?' + qs).then(setJobs).catch(() => setJobs([]))
@@ -81,13 +95,6 @@ function Register() {
     })
   }, [jobs, sort])
 
-  const Th = ({ k, children, className = '' }: { k?: SortKey; children: React.ReactNode; className?: string }) => (
-    <th scope="col" className={`py-3 pr-4 font-semibold ${className}`} aria-sort={k && sort.k === k ? (sort.desc ? 'descending' : 'ascending') : undefined}>
-      {k ? <button className="inline-flex items-center gap-1 uppercase tracking-[0.12em] hover:text-ink" onClick={() => setSort({ k, desc: sort.k === k ? !sort.desc : k !== 'company' && k !== 'title' })}>
-        {children}<span className={sort.k === k ? 'text-accent' : 'opacity-0'}>{sort.desc ? '↓' : '↑'}</span></button>
-        : <span className="uppercase tracking-[0.12em]">{children}</span>}
-    </th>
-  )
 
   return (
     <Section n="02" title="Register" note="Every job Seeko has seen, mirrored to Notion when it is connected.">
@@ -126,8 +133,9 @@ function Register() {
           <thead className="border-y-2 border-rule text-[11px] text-mute">
             <tr>
               <th scope="col" className="w-12 py-3 pr-4 font-semibold uppercase tracking-[0.12em]">No.</th>
-              <Th k="title">Role</Th><Th k="company">Company</Th><Th>Type</Th><Th>Source</Th>
-              <Th k="score" className="text-right">Score</Th><Th>Status</Th><Th>Notion</Th><Th className="text-right">Seen</Th><Th k="discovered_at">Found</Th>
+              <Th {...th} k="title">Role</Th><Th {...th} k="company">Company</Th><Th {...th}>Type</Th><Th {...th}>Source</Th>
+              <Th {...th} k="score" className="text-right">Score</Th><Th {...th}>Status</Th><Th {...th}>Notion</Th>
+              <Th {...th} className="text-right">Seen</Th><Th {...th} k="discovered_at">Found</Th>
             </tr>
           </thead>
           <tbody className="text-[14px]">

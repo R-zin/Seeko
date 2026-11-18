@@ -26,7 +26,7 @@ async def start(body: RunRequest | None = None):
     try:
         run_id = service.start_background(SearchSpec.from_profile(**o), trigger="api")
     except service.RunInProgress:
-        raise HTTPException(409, "a job search is already running")
+        raise HTTPException(409, "a job search is already running") from None
     return {"run_id": run_id}
 
 

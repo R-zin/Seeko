@@ -59,3 +59,28 @@ def test_export_and_description_search():
         assert [x["id"] for x in c.get("/api/jobs?q=terraform").json()] == ["exp1"]
         assert c.get("/api/jobs?state=open").status_code == 200 and c.get("/api/jobs?state=nope").status_code == 422
         assert c.post("/api/search/cancel").status_code == 409
+
+
+def test_search_start_and_resume_endpoints():
+    import time
+    from jobsearch.store import Store
+
+    def settle(c):
+        for _ in range(100):
+            if not c.get("/api/search/runs").json()["running"]: return
+            time.sleep(0.05)
+        raise AssertionError("search did not finish")
+
+    with TestClient(app) as c:
+        r = c.post("/api/search/runs", json={"sources": ["watchlist"], "role_titles": ["Nobody"]})
+        assert r.status_code == 202
+        run_id = r.json()["run_id"]
+        settle(c)
+        run = c.get(f"/api/search/runs/{run_id}").json()
+        assert run["status"] == "done" and run["trigger"] == "api" and run["spec"]["role_titles"] == ["Nobody"]
+        assert c.post(f"/api/search/runs/{run_id}/resume").status_code == 409      # finished runs are not resumed
+        st = Store(); st.start_run("api-interrupted", {}, "api"); st.mark_interrupted()
+        assert c.post("/api/search/runs/api-interrupted/resume").status_code == 202
+        settle(c)
+        logs = [x["message"] for x in c.get("/api/logs?level=warn").json()]
+        assert any("api-interrupted" in m and "no checkpoint" in m for m in logs)
