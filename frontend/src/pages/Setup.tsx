@@ -124,12 +124,25 @@ function ProfileSections() {
             </div>
           </Field>
           <div className="flex items-end pb-2"><Check checked={p.search.remote_only} onChange={v => up('search', 'remote_only', v)}>Remote only</Check></div>
+          <div>
+            <Kicker>Looking for</Kicker>
+            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+              {(['job', 'internship'] as const).map(t => (
+                <Check key={t} checked={p.search.job_types.includes(t)}
+                  onChange={v => { const next = v ? [...p.search.job_types, t] : p.search.job_types.filter((x: string) => x !== t); if (next.length) up('search', 'job_types', next) }}>
+                  {t === 'job' ? 'Jobs' : 'Internships'}
+                </Check>))}
+            </div>
+          </div>
+          <Field label="Skip postings older than, days" hint="Only when the page states a date. 0 = no limit.">
+            <input type="number" min={0} className={inputCls + ' tabular-nums'} value={p.search.max_age_days} onChange={e => up('search', 'max_age_days', Math.max(0, +e.target.value))} />
+          </Field>
         </div>
-        <Field label="Company career pages" hint="One URL per line — Greenhouse, Lever, Ashby or Workday boards." className="mt-8">
+        <Field label="Company career pages" hint="One URL per line. Greenhouse, Lever, Ashby and Workday boards are read through their APIs; any other careers page is browsed (robots.txt is respected)." className="mt-8">
           <textarea className={areaCls + ' font-mono text-[13px]'} rows={5} spellCheck={false}
             value={p.search.watchlist_urls.join('\n')}
             onChange={e => up('search', 'watchlist_urls', e.target.value.split('\n').map((x: string) => x.trim()).filter(Boolean))}
-            placeholder={'https://boards.greenhouse.io/acme\nhttps://jobs.lever.co/acme\nhttps://jobs.ashbyhq.com/acme'} />
+            placeholder={'https://boards.greenhouse.io/acme\nhttps://jobs.lever.co/acme\nhttps://www.acme.com/careers'} />
         </Field>
         {saveBtn('Save search')}
       </>}
@@ -139,10 +152,11 @@ function ProfileSections() {
 
 /* 05 — Sources & Notion -------------------------------------------------- */
 const BOARDS = [
-  { key: 'watchlist', label: 'Career pages', note: 'Public ATS APIs. Safe.' },
+  { key: 'watchlist', label: 'Career pages', note: 'ATS APIs and browsed careers pages. Safe.' },
   { key: 'linkedin', label: 'LinkedIn', note: 'Login required. ToS risk.' },
   { key: 'indeed', label: 'Indeed', note: 'Login required. ToS risk.' },
   { key: 'glassdoor', label: 'Glassdoor', note: 'Login required. ToS risk.' },
+  { key: 'internshala', label: 'Internshala', note: 'Internships and fresher jobs (India). ToS risk.' },
 ]
 
 function SourcesSection() {
@@ -152,7 +166,7 @@ function SourcesSection() {
   const toggle = (k: string, on: boolean) => setS({ ...s, enabled_sources: on ? [...s.enabled_sources, k] : s.enabled_sources.filter((y: string) => y !== k) })
 
   return <>
-    <Section n="05" title="Sources" note={<>LinkedIn, Indeed and Glassdoor restrict automation in their terms and may limit your account. <span className="text-accent">Off by default — keep volumes low.</span></>}>
+    <Section n="05" title="Sources" note={<>LinkedIn, Indeed, Glassdoor and Internshala restrict automation in their terms and may limit your account. <span className="text-accent">Off by default — keep volumes low.</span></>}>
       {!s ? <Skeleton /> : <>
         <ul className="border-t border-ink">
           {BOARDS.map(b => {
@@ -168,6 +182,38 @@ function SourcesSection() {
             )
           })}
         </ul>
+        <Kicker className="mt-10 block border-b border-ink pb-2">Browsing budget, per run</Kicker>
+        <div className="mt-5 grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2 xl:grid-cols-3">
+          <Field label="Postings opened per source" hint="The rest wait for the next run.">
+            <input type="number" min={1} max={500} className={inputCls + ' tabular-nums'} value={s.search_max_details} onChange={e => setS({ ...s, search_max_details: +e.target.value })} />
+          </Field>
+          <Field label="Result pages per search">
+            <input type="number" min={1} max={20} className={inputCls + ' tabular-nums'} value={s.search_max_pages} onChange={e => setS({ ...s, search_max_pages: +e.target.value })} />
+          </Field>
+          <Field label="Searches per board" hint="Roles × locations × jobs/internships, capped.">
+            <input type="number" min={1} max={50} className={inputCls + ' tabular-nums'} value={s.search_max_queries} onChange={e => setS({ ...s, search_max_queries: +e.target.value })} />
+          </Field>
+          <Field label="Delay between pages, seconds" hint="Random within this range.">
+            <div className="flex items-center gap-3">
+              <input type="number" min={0} step={0.5} aria-label="Minimum delay" className={inputCls + ' tabular-nums'} value={s.search_delay_min_s} onChange={e => setS({ ...s, search_delay_min_s: +e.target.value })} />
+              <span className="text-mute">to</span>
+              <input type="number" min={0} step={0.5} aria-label="Maximum delay" className={inputCls + ' tabular-nums'} value={s.search_delay_max_s} onChange={e => setS({ ...s, search_delay_max_s: +e.target.value })} />
+            </div>
+          </Field>
+          <Field label="Page loads per site, per 24 h" hint="Across all runs, so scheduled searches stay gentle.">
+            <input type="number" min={1} max={5000} className={inputCls + ' tabular-nums'} value={s.search_daily_pages} onChange={e => setS({ ...s, search_daily_pages: +e.target.value })} />
+          </Field>
+          <Field label="Pause a site after a block, hours" hint="After a CAPTCHA, login wall or rate limit. 0 = off.">
+            <input type="number" min={0} max={720} className={inputCls + ' tabular-nums'} value={s.search_block_cooldown_h} onChange={e => setS({ ...s, search_block_cooldown_h: +e.target.value })} />
+          </Field>
+          <Field label="Indeed site" hint="Country site, e.g. in.indeed.com.">
+            <input className={inputCls + ' font-mono text-[13px]'} value={s.indeed_host} onChange={e => setS({ ...s, indeed_host: e.target.value })} />
+          </Field>
+          <div className="flex flex-col justify-end gap-2 pb-2">
+            <Check checked={s.search_respect_robots} onChange={v => setS({ ...s, search_respect_robots: v })}>Respect robots.txt on careers pages</Check>
+            <Check checked={s.search_llm_review} onChange={v => setS({ ...s, search_llm_review: v })}>Let the model double-check unstructured pages</Check>
+          </div>
+        </div>
         <div className="mt-8"><button className={btnCls} onClick={() => a.run(async () => { await api('/settings', { method: 'PUT', json: s }); return 'Sources saved.' })}>Save sources</button></div>
         <Msg m={a.msg} />
       </>}

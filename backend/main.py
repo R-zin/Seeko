@@ -15,6 +15,10 @@ async def lifespan(app: FastAPI):
     import asyncio
     from workers import pipeline
     pipeline.recover_orphans()
+    from jobsearch.store import Store
+    if n := Store().mark_interrupted():
+        from db import log
+        log(f"{n} job search run(s) were interrupted by a restart; resume them from the Tracker or `python -m jobsearch resume`", "warn")
     task = asyncio.create_task(pipeline.loop())
     yield
     task.cancel(); await pipeline.shutdown()
@@ -29,7 +33,7 @@ def health(): return {"ok": True}
 
 # routers added as modules land (see register() calls below)
 def _register():
-    for name in ("settings", "resume", "jobs", "pipeline", "notion", "logs"):
+    for name in ("settings", "resume", "jobs", "pipeline", "search", "notion", "logs"):
         try:
             mod = __import__(f"api.{name}", fromlist=["router"])
             app.include_router(mod.router)

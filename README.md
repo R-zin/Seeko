@@ -1,9 +1,11 @@
 # Seeko
 
-Find jobs, tailor your LaTeX resume per role (without inventing anything), fill the application, and track everything in Notion.
+Find jobs and internships, tailor your LaTeX resume per role (without inventing anything), fill the application, and track everything in PostgreSQL and Notion.
 
 ## Setup
 Requires Python 3.11+, Node 20+, a LaTeX compiler (`tectonic` recommended, or `pdflatex`).
+PostgreSQL needs no install: with `DATABASE_URL` blank the app starts an embedded server (data in `data/postgres`).
+To use your own server instead, set `DATABASE_URL=postgresql://user:pass@host:5432/seeko` (or `docker compose up -d db`).
 ```bash
 cd backend && uv venv --python 3.12 .venv && uv pip install -e ".[dev]" && .venv/bin/playwright install chromium
 cd ../frontend && npm install
@@ -21,8 +23,50 @@ The first LaTeX compile with tectonic downloads its TeX bundle (a few minutes on
 3. Optional: *Log in to LinkedIn/Indeed/Glassdoor* opens a visible browser; sign in once, close it. Sessions persist in `browser_data/`.
 4. Optional: Notion — create an internal integration, share your tracker database with it, paste token + database ID, *Test Notion MCP*.
    Required properties: Role (title), Company, Source, Job URL (url), Match Score (number), Status (select/status), Tailored Summary, Applied Date (date).
-5. **Pipeline tab → Run discovery.** Jobs are scored, tailored, compiled, and the form is filled. In the default **approval gate** mode the browser stays on the filled form
+5. **Pipeline tab → Run discovery** (or Tracker → Searches → *Search now*). New jobs and internships are saved with their full
+   description, then scored, tailored, compiled, and the form is filled. In the default **approval gate** mode the browser stays on the filled form
    and you click **Approve & Submit** (or Skip) in the dashboard.
+
+## Job search (LangGraph + PostgreSQL)
+Discovery is a LangGraph `StateGraph` (`backend/jobsearch/graph.py`):
+
+```
+plan → collect (per source, in parallel) → dedupe → fetch (per source) → screen → [review] → persist → finish
+```
+
+- **Sources.** Career pages: Greenhouse / Lever / Ashby / Workday boards through their public APIs; *any other careers page is browsed*
+  with Playwright (follows its pagination and "Load more", reads iframes). Boards (opt-in): LinkedIn, Indeed, Glassdoor, Internshala,
+  browsed in your persistent, signed-in profile.
+- **Already found = never re-read.** Every lead is checked against PostgreSQL by link and by company + title before its page is opened.
+  Known jobs get a *sighting* (`times_seen`, `last_seen_at`); pages read and rejected (expired, gone, not a posting…) are not re-read for
+  `SEARCH_REVISIT_DAYS`.
+- **Careful screening.** Titles must match a target role (synonyms like SDE/SWE/developer are understood, "Sales Engineer" is not a
+  "Software Engineer"), job vs internship comes from the posting (schema.org `employmentType`, the title, the URL), plus location / remote,
+  posting age and expiry, excluded companies, and a real description. Pages with no structured data are double-checked by your model.
+- **Polite browsing.** Jittered 3–8 s delays, page and detail budgets per source (the rest is picked up next run), robots.txt on careers
+  pages, and the first CAPTCHA / login wall / HTTP 429 stops that source for the run. Nothing tries to get past a bot check.
+  Across runs (e.g. scheduled discovery): each browsed site gets at most `SEARCH_DAILY_PAGES` page loads per 24 h, and a site that
+  blocked a run is left alone for `SEARCH_BLOCK_COOLDOWN_H` hours.
+- **Closed postings.** When a Greenhouse / Lever / Ashby board no longer lists a saved job, or its stated expiry date passes, the job is
+  marked closed (`closed_at`) and the worker no longer tailors or applies to it; it reopens if it is seen again.
+- **Find and export.** The Tracker search (and `GET /api/jobs?q=`) is full-text over title, company and the saved description, using a
+  PostgreSQL GIN index with web-search syntax (`"exact phrase"`, `-exclude`, `OR`). *Export CSV / JSON* downloads the filtered jobs with
+  their full descriptions (`/api/jobs/export`).
+- **Control.** Tracker → Searches shows the step a run is on, *Stop search* ends it cleanly (it can be resumed), and every finished run
+  records what it found, skipped, closed and why.
+- **What is stored.** `jobs` (full description as text, `job_type` job|internship, posted/expiry dates, remote, source of the text,
+  times seen), `search_runs` (spec + statistics per run), `job_sightings`, `seen_urls`, and LangGraph checkpoints — an interrupted run
+  resumes where it stopped (Tracker → Searches → *Resume*, or the CLI). Schema changes are Alembic migrations, applied at startup;
+  an existing `data/seeko.db` (SQLite) is imported once into an empty PostgreSQL.
+
+CLI, from `backend/`:
+```bash
+.venv/bin/python -m jobsearch run                              # profile + settings
+.venv/bin/python -m jobsearch run --title "Data Analyst" --type internship --source internshala --location Kochi
+.venv/bin/python -m jobsearch runs | jobs --type internship --q "django -senior" | show <job_id> | resume <run_id> | db
+.venv/bin/python -m jobsearch export --format csv -o jobs.csv   # all jobs with descriptions (Ctrl-C a run: resume it later)
+```
+LangGraph Studio: `pip install "langgraph-cli[inmem]"` and `langgraph dev` in `backend/` (graph `job_search`, see `langgraph.json`).
 
 ## Safety
 - Approval gate is the default. Full-auto is opt-in, has a daily cap, and pauses on CAPTCHA / 2FA / unanswerable required fields.
@@ -31,9 +75,13 @@ The first LaTeX compile with tectonic downloads its TeX bundle (a few minutes on
   break compilation or overflow the page are reverted individually, and the review panel lists every accepted/rejected/reverted edit.
 - LaTeX is compiled with shell-escape disabled, in an isolated temp dir, with a hard timeout; `\write18` and absolute/`..` file paths are refused.
 - Form answers come only from your resume/profile; unknown required fields are left for you.
-- LinkedIn/Indeed/Glassdoor restrict automation in their terms and may restrict your account. They are off by default; use low volumes at your own risk.
+- LinkedIn/Indeed/Glassdoor/Internshala restrict automation in their terms and may restrict your account. They are off by default; use low volumes at your own risk.
+- Job search never solves or bypasses a CAPTCHA or login wall: the source stops for that run and the reason is shown under Tracker → Searches.
 - If the server restarts while a job awaits approval, the live browser page is lost (approve returns 409); re-run that job.
 
 ## Tests
 `cd backend && .venv/bin/python -m pytest -q` — mock OpenAI server (tier fallback, 401/404), LaTeX compile + overflow recovery + fabrication guards,
-fake Notion MCP server over stdio, dedupe/ATS parsing, Playwright dry-run on Greenhouse/Lever-style fixtures. `NOTION_TOKEN` enables a live Notion smoke test.
+fake Notion MCP server over stdio, dedupe/ATS parsing, Playwright dry-run on Greenhouse/Lever-style fixtures, and the job search graph end to end
+(real headless Chromium on a fixture careers site and a CAPTCHA'd board, checkpoint resume). Storage tests run on SQLite and on a real
+PostgreSQL: `TEST_DATABASE_URL` (CI uses a service container; tests only touch their own schemas) or else the embedded server.
+`NOTION_TOKEN` enables a live Notion smoke test.

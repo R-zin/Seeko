@@ -1,0 +1,12 @@
+# Optional: a standalone PostgreSQL instead of the embedded one.
+#   docker compose up -d db
+#   DATABASE_URL=postgresql://seeko:seeko@localhost:5432/seeko   (in .env)
+services:
+  db:
+    image: postgres:16
+    environment: { POSTGRES_USER: seeko, POSTGRES_PASSWORD: seeko, POSTGRES_DB: seeko }
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["seeko-pg:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U seeko"], interval: 5s, retries: 10 }
+volumes:
+  seeko-pg:

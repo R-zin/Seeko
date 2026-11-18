@@ -8,14 +8,24 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      postgres:   # the job search store; tests use their own schemas (TEST_DATABASE_URL)
+        image: postgres:16
+        env: { POSTGRES_USER: seeko, POSTGRES_PASSWORD: seeko, POSTGRES_DB: seeko_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U seeko -d seeko_test" --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3   # setup-uv publishes no floating major tag; pin the release
+        with: { cache-dependency-glob: backend/pyproject.toml }
       - name: Install Python deps
         working-directory: backend
         run: |
           uv venv --python 3.12 .venv
           uv pip install -e ".[dev]"
+      - name: Python 3.11 syntax check (pyproject allows >= 3.11; tests run on 3.12)
+        run: uv run --no-project --python 3.11 python -m compileall -q -x '/\.venv/' backend
       - name: Install Chromium for Playwright
         working-directory: backend
         run: .venv/bin/playwright install --with-deps chromium
@@ -25,7 +35,7 @@ jobs:
           sudo mv tectonic /usr/local/bin/
           tectonic --version
       - name: Cache tectonic bundle
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/Tectonic
           key: tectonic-bundle-v1
@@ -35,14 +45,16 @@ jobs:
           cd /tmp && tectonic w.tex
       - name: Tests
         working-directory: backend
-        run: .venv/bin/python -m pytest -q
+        env:
+          TEST_DATABASE_URL: postgresql://seeko:seeko@localhost:5432/seeko_test
+        run: .venv/bin/python -m pytest -q -rs
 
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
       - working-directory: frontend
         run: |

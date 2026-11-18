@@ -2,7 +2,9 @@ from __future__ import annotations
 import asyncio
 from fastapi import APIRouter, HTTPException
 from workers import pipeline as P
-from scraper.browser import interactive_login, LOGIN_URLS
+from scraper.browser import interactive_login
+from scraper.boards import LOGIN_URLS
+from jobsearch import service as search
 from applier.gate import applied_today
 from config.settings import get_settings
 
@@ -11,13 +13,15 @@ router = APIRouter(prefix="/api/pipeline")
 
 @router.get("/status")
 def status():
-    return {"paused": P.state["paused"], "running": P.state["running"], "applied_today": applied_today(),
+    return {"paused": P.state["paused"], "running": P.state["running"], "searching": search.is_running(), "applied_today": applied_today(),
             "daily_cap": get_settings().daily_apply_cap, "llm_configured": P.llm_configured(), "approval_mode": get_settings().approval_mode}
 
 
 @router.post("/discover")
 async def discover():
-    asyncio.create_task(P.discover()); return {"started": True}
+    try: run_id = search.start_background(trigger="api")
+    except search.RunInProgress: raise HTTPException(409, "a job search is already running")
+    return {"started": True, "run_id": run_id}
 
 
 @router.post("/pause")

@@ -216,7 +216,8 @@ def _contact_tex(item: str) -> str:
     if EMAIL_RE.fullmatch(item): return rf"\href{{mailto:{item}}}{{{escape_text(item)}}}"
     if URL_RE.fullmatch(item) and "." in item:
         url = item if item.startswith("http") else "https://" + item
-        return rf"\href{{{url.replace('%', r'\%').replace('#', r'\#')}}}{{{escape_text(item)}}}"
+        url = url.replace("%", r"\%").replace("#", r"\#")   # outside the f-string: Python 3.11 has no backslashes in {}
+        return rf"\href{{{url}}}{{{escape_text(item)}}}"
     return escape_text(item)
 
 

@@ -1,64 +1,108 @@
-"""LinkedIn / Indeed / Glassdoor scrapers (authenticated persistent profile). Selectors drift; each is isolated here.
-Terms of service of these sites restrict automation: keep limits low, use at your own risk."""
+"""Job boards browsed with Playwright (persistent profile in browser_data/<source>, so a manual login is reused).
+
+Everything site-specific lives here and nowhere else: how to build a search URL for a page of results, which links
+on a results page are job postings (matched on the href, which drifts far less than CSS classes), how to turn such a
+link into a stable detail URL, and where the description sits when a detail page has no JSON-LD.
+Terms of service of these sites restrict automation: they are off by default; keep volumes low.
+"""
 from __future__ import annotations
-from urllib.parse import quote_plus
-from schemas import JobPosting
-from .base import RateLimiter
-from .browser import open_context
+import re
+from dataclasses import dataclass
+from typing import Callable
+from urllib.parse import parse_qs, quote, quote_plus, urlsplit
+from config.settings import get_settings
 
 
-class _Board:
-    source = ""; limiter = RateLimiter(4, 10)
-    def url(self, title: str, loc: str) -> str: raise NotImplementedError
-    card_sel = ""; title_sel = ""; company_sel = ""; loc_sel = ""; link_sel = ""; desc_sel = ""; easy_sel = ""
-
-    async def search(self, titles, locations, limit=15) -> list[JobPosting]:
-        pw, ctx = await open_context(self.source)
-        out: list[JobPosting] = []
-        try:
-            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            for t in titles:
-                for loc in (locations or [""]):
-                    if len(out) >= limit: break
-                    await self.limiter.wait(); await page.goto(self.url(t, loc), wait_until="domcontentloaded")
-                    cards = await page.query_selector_all(self.card_sel)
-                    for c in cards[: limit - len(out)]:
-                        try:
-                            await c.click(); await self.limiter.wait()
-                            g = lambda sel: page.locator(sel).first.inner_text() if sel else None
-                            a = await c.query_selector(self.link_sel); href = await a.get_attribute("href") if a else ""
-                            if href and href.startswith("/"): href = page.url.split("/", 3)[0] + "//" + page.url.split("/")[2] + href
-                            out.append(JobPosting(
-                                source=self.source, title=(await c.inner_text()).split("\n")[0], company=(await (await c.query_selector(self.company_sel)).inner_text()) if self.company_sel and await c.query_selector(self.company_sel) else "",
-                                location=(await (await c.query_selector(self.loc_sel)).inner_text()) if self.loc_sel and await c.query_selector(self.loc_sel) else loc,
-                                url=href or page.url, jd_text=await g(self.desc_sel) if self.desc_sel else "",
-                                is_easy_apply=bool(self.easy_sel and await c.query_selector(self.easy_sel))))
-                        except Exception: continue
-        finally:
-            await ctx.close(); await pw.stop()
-        return out
+@dataclass(frozen=True)
+class Board:
+    source: str
+    login_url: str
+    search_url: Callable[[str, str, int, bool], str | None]   # (query, location, page index, internship) -> URL | None
+    link: re.Pattern                                            # matches the href of a posting on a results page
+    canonical: Callable[[str], str | None]                     # results-page href -> stable detail URL
+    description_selector: str                                  # detail-page description when there is no JSON-LD
+    native_internship_filter: bool = False                     # search_url handles internship=True itself
+    lead_location: Callable[[str], str] | None = None          # location readable from a posting URL ("" = unknown)
 
 
-class LinkedIn(_Board):
-    source = "linkedin"
-    def url(self, t, l): return f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(t)}&location={quote_plus(l)}&f_AL=false"
-    card_sel = "li[data-occludable-job-id], .job-card-container"; link_sel = "a.job-card-list__title, a[href*='/jobs/view/']"
-    company_sel = ".job-card-container__primary-description, .artdeco-entity-lockup__subtitle"; loc_sel = ".job-card-container__metadata-item"
-    desc_sel = ".jobs-description__content, #job-details"; easy_sel = ".job-card-container__apply-method, [aria-label*='Easy Apply']"
+def _linkedin_search(q: str, loc: str, page: int, internship: bool) -> str:
+    jt = "&f_JT=I" if internship else ""
+    return f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(q)}&location={quote_plus(loc)}{jt}&start={25 * page}"
 
 
-class Indeed(_Board):
-    source = "indeed"
-    def url(self, t, l): return f"https://www.indeed.com/jobs?q={quote_plus(t)}&l={quote_plus(l)}"
-    card_sel = "div.job_seen_beacon"; link_sel = "a.jcs-JobTitle"; company_sel = "[data-testid='company-name']"
-    loc_sel = "[data-testid='text-location']"; desc_sel = "#jobDescriptionText"; easy_sel = "[data-testid='indeedApply'], .iaLabel"
+_LI_ID = re.compile(r"linkedin\.com/(?:comm/)?jobs/view/(?:[^/?#]*?-)?(\d{6,})")
 
 
-class Glassdoor(_Board):
-    source = "glassdoor"
-    def url(self, t, l): return f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={quote_plus(t)}&locKeyword={quote_plus(l)}"
-    card_sel = "li[data-test='jobListing']"; link_sel = "a[data-test='job-link']"; company_sel = "[class*='EmployerProfile_employerName']"
-    loc_sel = "[data-test='emp-location']"; desc_sel = "[class*='JobDetails_jobDescription']"; easy_sel = "[data-test='easy-apply-badge']"
+def _linkedin_canonical(href: str) -> str | None:
+    m = _LI_ID.search(href)
+    return f"https://www.linkedin.com/jobs/view/{m.group(1)}/" if m else None
 
 
-BOARDS = {"linkedin": LinkedIn, "indeed": Indeed, "glassdoor": Glassdoor}
+def _indeed_host() -> str:
+    return (get_settings().indeed_host or "www.indeed.com").strip().strip("/")
+
+
+def _indeed_search(q: str, loc: str, page: int, internship: bool) -> str:
+    return f"https://{_indeed_host()}/jobs?q={quote_plus(q)}&l={quote_plus(loc)}&start={10 * page}"
+
+
+def _indeed_canonical(href: str) -> str | None:
+    jk = parse_qs(urlsplit(href).query).get("jk")
+    return f"https://{_indeed_host()}/viewjob?jk={jk[0]}" if jk and re.fullmatch(r"[0-9a-f]{16}", jk[0]) else None
+
+
+def _glassdoor_search(q: str, loc: str, page: int, internship: bool) -> str | None:
+    if page:   # results load with a button, not a URL; one page per query
+        return None
+    return f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={quote_plus(q)}&locKeyword={quote_plus(loc)}"
+
+
+def _glassdoor_canonical(href: str) -> str | None:
+    p = urlsplit(href)
+    jl = parse_qs(p.query).get("jl")
+    if jl: return f"https://www.glassdoor.com/job-listing/index.htm?jl={jl[0]}"
+    return f"https://www.glassdoor.com{p.path}" if "/job-listing/" in p.path else None
+
+
+def _internshala_search(q: str, loc: str, page: int, internship: bool) -> str:
+    # Keyword search (verified live 2026-11): /internships/keywords-<q>/ and /jobs/keywords-<q>/, then /page-N/.
+    # The location is not part of the URL; it is read from each posting's slug and screened before opening it.
+    kind = "internships" if internship else "jobs"
+    page_part = f"page-{page + 1}/" if page else ""
+    return f"https://internshala.com/{kind}/keywords-{quote(' '.join(q.lower().split()))}/{page_part}"
+
+
+def _internshala_canonical(href: str) -> str | None:
+    p = urlsplit(href)
+    return f"https://internshala.com{p.path.rstrip('/')}" if re.match(r"^/(internship|job)/details?/", p.path) else None
+
+
+def _internshala_location(url: str) -> str:
+    slug = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
+    if slug.startswith("work-from-home") or "-work-from-home-" in slug:
+        return "Remote"
+    m = re.search(r"(?:internship|job)-in-([a-z0-9-]+?)-at-", slug)
+    return "" if not m or m.group(1) == "multiple-locations" else m.group(1).replace("-", " ").title()
+
+
+BOARDS: dict[str, Board] = {
+    "linkedin": Board(
+        "linkedin", "https://www.linkedin.com/login", _linkedin_search, re.compile(r"linkedin\.com/(comm/)?jobs/view/"),
+        _linkedin_canonical,
+        ".show-more-less-html__markup, .description__text, .jobs-description__content, #job-details",
+        native_internship_filter=True),
+    "indeed": Board(
+        "indeed", "https://secure.indeed.com/auth", _indeed_search, re.compile(r"indeed\.[a-z.]+/(viewjob|rc/clk|pagead/clk)\?.*\bjk="),
+        _indeed_canonical, "#jobDescriptionText"),
+    "glassdoor": Board(
+        "glassdoor", "https://www.glassdoor.com/profile/login_input.htm", _glassdoor_search,
+        re.compile(r"glassdoor\.[a-z.]+/(job-listing/|partner/jobListing\.htm\?.*\bjl=)"), _glassdoor_canonical,
+        "[class*='JobDetails_jobDescription'], #JobDescriptionContainer"),
+    "internshala": Board(
+        "internshala", "https://internshala.com/login/user", _internshala_search,
+        re.compile(r"internshala\.com/(internship|job)/details?/"), _internshala_canonical,
+        ".internship_details, .detail_view, #details_container", native_internship_filter=True,
+        lead_location=_internshala_location),
+}
+
+LOGIN_URLS = {k: b.login_url for k, b in BOARDS.items()}
