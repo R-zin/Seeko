@@ -39,3 +39,23 @@ def test_search_api():
         assert c.put("/api/settings", json={"search_max_details": 0}).status_code == 422
         st = c.get("/api/pipeline/status").json()
         assert st["searching"] is False
+
+
+def test_export_and_description_search():
+    import csv, io
+    from db import Job, SessionLocal
+    with TestClient(app) as c:
+        with SessionLocal() as s:
+            s.merge(Job(id="exp1", source="lever", company="Acme, Inc.", title="Platform Engineer", url="https://x.test/1",
+                        canonical_url="https://x.test/1", dedupe_key="acme|platform engineer",
+                        jd_text="Line one, with comma\nLine two: Terraform", job_type="job")); s.commit()
+        r = c.get("/api/jobs/export?format=csv")
+        assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+        rows = list(csv.DictReader(io.StringIO(r.text.lstrip("﻿"))))
+        row = next(x for x in rows if x["id"] == "exp1")
+        assert row["jd_text"] == "Line one, with comma\nLine two: Terraform" and row["company"] == "Acme, Inc."
+        js = c.get("/api/jobs/export?format=json&q=terraform").json()
+        assert [x["id"] for x in js] == ["exp1"]
+        assert [x["id"] for x in c.get("/api/jobs?q=terraform").json()] == ["exp1"]
+        assert c.get("/api/jobs?state=open").status_code == 200 and c.get("/api/jobs?state=nope").status_code == 422
+        assert c.post("/api/search/cancel").status_code == 409

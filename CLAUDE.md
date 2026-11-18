@@ -23,7 +23,9 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
   fan out per source with `Send`; all I/O behind `Deps` so tests inject fakes), `browse.py` (Playwright `Session`: pacing, robots.txt, block
   detection, pagination/"Load more", iframe links), `extract.py` (JSON-LD JobPosting → board selector → page text; `detect_block`),
   `leads.py` (results-page links → leads), `classify.py` (job/internship, title match, location, freshness, `screen`), `store.py`
-  (idempotent writes: ON CONFLICT inserts, sightings unique per run), `service.py` (one run at a time, Postgres checkpointer, resume),
+  (idempotent writes: ON CONFLICT inserts, sightings unique per run; closures; `jobs_query` = the one jobs query, full-text on
+  PostgreSQL via `db.FTS_DOC`, which must match the GIN index in migration 0003), `service.py` (one run at a time in its own task so
+  `cancel()` never hits the caller, streamed progress, Postgres checkpointer, resume),
   `__main__.py` CLI, `app.py` + `langgraph.json` for LangGraph Studio. API: `api/search.py`.
 - `scraper/` `ats.py` (Greenhouse/Lever/Ashby/Workday JSON), `boards.py` (declarative LinkedIn/Indeed/Glassdoor/Internshala configs: search URL,
   posting-link regex, canonical URL, description selector; persistent Playwright profile in `browser_data/`),
@@ -55,7 +57,8 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 - `mcp` is pinned `<2` (v2 renamed APIs). Tests with Playwright/tectonic need Chromium + tectonic installed; first tectonic run downloads its bundle.
 - Board scraper selectors drift; keep them isolated in `scraper/boards.py`. Tests use fixtures/mocks, never live sites.
 - Job search must stay careful: never re-read a known posting (check the DB before opening pages), keep per-source budgets and jittered delays,
-  stop a source at the first CAPTCHA / login wall / 429 (never bypass), obey robots.txt on careers pages. Graph state stays JSON-native
+  stop a source at the first CAPTCHA / login wall / 429 (never bypass), obey robots.txt on careers pages. Across runs `apply_limits`
+  enforces the per-site daily page budget and the post-block cooldown; every browser `Session` gets the remaining budget. Graph state stays JSON-native
   (dicts, ISO date strings) so checkpoints serialize. Store writes must stay idempotent (nodes retry, runs resume).
 - Tests never touch the user's DB: `tests/conftest.py` forces a temp SQLite `DATABASE_URL`; PostgreSQL tests use `TEST_DATABASE_URL` or the
   embedded server, each in its own schema (`migrated` fixture runs a test on both backends).

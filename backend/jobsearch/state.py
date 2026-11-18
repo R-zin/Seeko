@@ -39,6 +39,7 @@ class SearchState(TypedDict, total=False):
     spec: dict
     tasks: list[dict]                                   # one per source: api / careers / board
     leads: Annotated[list[dict], operator.add]          # links found on results pages (fan-in from collect)
+    listings: Annotated[list[dict], operator.add]       # full company boards seen (source, company, urls) -> closures
     known: list[dict]                                   # leads that are already stored jobs -> sightings
     pending: dict                                       # source -> leads whose detail page must be read
     postings: Annotated[list[dict], operator.add]       # full postings (API leads + fetched pages)

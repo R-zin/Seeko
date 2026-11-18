@@ -18,7 +18,7 @@ export interface Job {
   is_easy_apply: boolean; status: string; score: number | null; tailored_summary: string
   tailored_ok: boolean; error: string; notion_page_id: string; missing_keywords: string[]; discovered_at: string; applied_at: string | null
   job_type: 'job' | 'internship'; employment_type: string; is_remote: boolean; jd_source: string; relevance: number | null
-  times_seen: number; posted_at: string | null; last_seen_at: string | null
+  times_seen: number; posted_at: string | null; last_seen_at: string | null; closed_at: string | null
 }
 
 export interface SearchRun {
@@ -28,6 +28,8 @@ export interface SearchRun {
   stats: {
     leads?: number; known?: number; new?: number; new_jobs?: number; new_internships?: number; read?: number
     deferred?: number; errors?: number; rejected?: Record<string, number>; blocked?: Record<string, string>
+    closed?: number; reopened?: number; skipped_sources?: Record<string, string>
+    progress?: { step: string; leads: number; read: number; sources_done: string[]; at?: string }
   }
 }
 export interface JobDetail extends Job { diff: string; base_tex: string; tailored_tex: string; has_pdf: boolean; has_screenshot: boolean; cover_letter: string; jd_text: string; tailor_report: TailorReport | null }

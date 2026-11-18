@@ -4,7 +4,7 @@ import json
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, select, text, update
 from sqlalchemy.orm import sessionmaker
 import db
 from db import Job, JobSighting, SeenUrl, utcnow
@@ -22,8 +22,7 @@ def posting(n: int, **kw) -> dict:
 def test_migrations_match_models(migrated):
     eng, _ = migrated
     with eng.connect() as c:
-        mc = MigrationContext.configure(c, opts={"compare_type": True, "include_object":
-                                                 lambda o, n, t, r, ct: not (t == "table" and r and ct is None and n not in db.Base.metadata.tables)})
+        mc = MigrationContext.configure(c, opts={"compare_type": True, "include_object": db.alembic_include_object})
         assert compare_metadata(mc, db.Base.metadata) == []
     db.migrate(eng)   # idempotent
 
@@ -94,7 +93,9 @@ def test_legacy_sqlite_is_adopted_and_backfilled(tmp_path):
         rows = dict(c.execute(text("SELECT title, job_type FROM jobs")).all())
         assert rows == {"Data Science Intern": "internship", "International Sales Lead": "job"}
         assert c.execute(text("SELECT last_seen_at FROM jobs")).scalar() is not None
-        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0002"
+        from alembic.script import ScriptDirectory
+        head = ScriptDirectory.from_config(db.alembic_config()).get_current_head()
+        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
 
 
 @pytest.mark.postgres
@@ -144,3 +145,65 @@ def test_normalize_url():
     assert db.normalize_url("postgres://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
     assert db.normalize_url("postgresql://u@/d?host=/tmp") == "postgresql+psycopg://u@/d?host=/tmp"
     assert db.normalize_url("sqlite:///x.db") == "sqlite:///x.db"
+
+
+def test_closed_postings_and_reopening(migrated):
+    _, SL = migrated
+    st = Store(SL)
+    st.start_run("r1", {}, "test")
+    st.persist_run("r1", [posting(1), posting(2), posting(3, valid_through="2020-01-01")], [], [])
+    with SL() as s:
+        ids = {j.title: j.id for j in s.scalars(select(Job))}
+    with SL() as s:                                       # job 3 was past its expiry date when it was saved
+        assert {j.title for j in s.scalars(select(Job).where(Job.closed_at.is_not(None)))} == {"Engineer 3"}
+    # r2: the full Greenhouse board for "acme" only lists job 1 -> job 2 has closed
+    st.start_run("r2", {}, "test")
+    res = st.persist_run("r2", [], [], [], [{"source": "greenhouse", "company": "Acme", "urls": ["https://boards.greenhouse.io/acme/jobs/1"]}])
+    with SL() as s:
+        closed = {j.title for j in s.scalars(select(Job).where(Job.closed_at.is_not(None)))}
+    assert closed == {"Engineer 2", "Engineer 3"} and res["closed"] == 1
+    # r3: job 2 is seen again -> reopened
+    st.start_run("r3", {}, "test")
+    res = st.persist_run("r3", [], [{"job_id": ids["Engineer 2"], "source": "greenhouse",
+                                     "url": "https://boards.greenhouse.io/acme/jobs/2"}], [])
+    assert res["reopened"] == 1
+    with SL() as s:
+        assert s.get(Job, ids["Engineer 2"]).closed_at is None
+
+
+def test_jobs_query_filters_and_searches_descriptions(migrated):
+    from jobsearch.store import jobs_query
+    eng, SL = migrated
+    st = Store(SL)
+    st.start_run("r1", {}, "test")
+    st.persist_run("r1", [posting(1, title="Backend Engineer", jd_text=JD + " We run Kubernetes clusters."),
+                          posting(2, title="Data Engineering Intern", job_type="internship", jd_text=JD + " Airflow and dbt."),
+                          posting(3, title="Frontend Engineer", jd_text=JD + " React; no Kubernetes needed.")], [], [])
+    with SL() as s:
+        titles = lambda **kw: [j.title for j in s.scalars(jobs_query(s, **kw))]
+        assert set(titles(q="kubernetes")) == {"Backend Engineer", "Frontend Engineer"}     # found in the description
+        assert titles(q="airflow", job_type="internship") == ["Data Engineering Intern"]
+        assert titles(q="Front") == ["Frontend Engineer"]                                  # partial title match
+        assert titles(q="100%_") == []                                                      # LIKE wildcards are literal
+        s.execute(update(Job).where(Job.title == "Frontend Engineer").values(closed_at=utcnow())); s.commit()
+        assert set(titles(state="open")) == {"Backend Engineer", "Data Engineering Intern"}
+        assert titles(state="closed") == ["Frontend Engineer"]
+        if eng.dialect.name == "postgresql":
+            assert titles(q='kubernetes -react') == ["Backend Engineer"]                     # websearch syntax
+            s.execute(text("SET enable_seqscan = off"))
+            plan = "\n".join(r[0] for r in s.execute(text(
+                f"EXPLAIN SELECT id FROM jobs WHERE {db.FTS_DOC} @@ websearch_to_tsquery('english', 'kubernetes')")))
+            assert "ix_jobs_fts" in plan                                                   # the GIN index is used
+
+
+def test_progress_and_recent_run_stats(migrated):
+    _, SL = migrated
+    st = Store(SL)
+    st.start_run("r1", {}, "test")
+    st.set_progress("r1", {"step": "reading postings", "leads": 4}, {"linkedin": {"loads": 7}})
+    assert st.get_run("r1")["stats"]["progress"]["step"] == "reading postings"
+    rows = st.recent_run_stats(utcnow() - timedelta(hours=1))
+    assert rows[0][1]["sources"]["linkedin"]["loads"] == 7
+    st.finish_run("r1", "done", {"new": 1})
+    st.set_progress("r1", {"step": "late"}, {})                                             # ignored once finished
+    assert st.get_run("r1")["stats"] == {"new": 1}

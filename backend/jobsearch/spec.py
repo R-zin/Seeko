@@ -29,6 +29,8 @@ class SearchSpec(BaseModel):
     respect_robots: bool = True
     llm_review: bool = True
     headless: bool = True
+    daily_pages: int = Field(80, ge=1, le=5000)          # page loads per browsed source per rolling 24 h
+    block_cooldown_h: float = Field(12, ge=0, le=720)    # skip a source this long after it blocked us
 
     @field_validator("role_titles", "keywords", "locations", "excluded_companies", "watchlist_urls", "sources")
     @classmethod
@@ -57,6 +59,7 @@ class SearchSpec(BaseModel):
             max_queries=s.search_max_queries, max_pages=s.search_max_pages, max_details=s.search_max_details,
             revisit_days=s.search_revisit_days, delay_min_s=s.search_delay_min_s,
             delay_max_s=max(s.search_delay_max_s, s.search_delay_min_s), respect_robots=s.search_respect_robots,
-            llm_review=s.search_llm_review, headless=s.search_headless)
+            llm_review=s.search_llm_review, headless=s.search_headless, daily_pages=s.search_daily_pages,
+            block_cooldown_h=s.search_block_cooldown_h)
         base.update({k: v for k, v in overrides.items() if v is not None})
         return cls.model_validate(base)

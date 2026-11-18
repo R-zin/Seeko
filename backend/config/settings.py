@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     search_respect_robots: bool = True  # careers pages: obey robots.txt
     search_llm_review: bool = True      # LLM double-checks pages that had no structured job data
     search_headless: bool = True
+    search_daily_pages: int = 80        # page loads per browsed source per rolling 24 h, across all runs
+    search_block_cooldown_h: float = 12 # after a CAPTCHA / login wall / 429, leave that source alone this long
     indeed_host: str = "www.indeed.com"   # country site, e.g. in.indeed.com, uk.indeed.com
 
     def extra_headers(self) -> dict[str, str]:

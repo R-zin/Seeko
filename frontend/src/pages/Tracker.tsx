@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type Job, type SearchRun } from '../api'
-import { Badge, Field, Kicker, Msg, Section, btnCls, inputCls, linkBtnCls, pad, useAction } from '../ui'
+import { Badge, Field, Kicker, Msg, Section, btn2Cls, btnCls, inputCls, linkBtnCls, pad, useAction } from '../ui'
 
 const STATUSES = ['scraped', 'scored', 'tailoring', 'tailored', 'applying', 'needs_review', 'applied', 'failed', 'skipped']
 const SOURCES = ['greenhouse', 'lever', 'ashby', 'workday', 'careers', 'linkedin', 'indeed', 'glassdoor', 'internshala']
@@ -62,14 +62,15 @@ function Controls() {
 /* 02 — Register ---------------------------------------------------------- */
 function Register() {
   const [jobs, setJobs] = useState<Job[] | null>(null)
-  const [f, setF] = useState({ status: '', source: '', job_type: '', q: '' })
+  const [f, setF] = useState({ status: '', source: '', job_type: '', state: '', q: '' })
+  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString()
   const [sort, setSort] = useState<{ k: SortKey; desc: boolean }>({ k: 'discovered_at', desc: true })
 
   useEffect(() => {
-    const load = () => api('/jobs?' + new URLSearchParams(Object.entries(f).filter(([, v]) => v))).then(setJobs).catch(() => setJobs([]))
+    const load = () => api('/jobs?' + qs).then(setJobs).catch(() => setJobs([]))
     const t0 = setTimeout(load, 200); const t = setInterval(load, 5000)
     return () => { clearTimeout(t0); clearInterval(t) }
-  }, [f])
+  }, [qs])
 
   const rows = useMemo(() => {
     if (!jobs) return []
@@ -90,8 +91,13 @@ function Register() {
 
   return (
     <Section n="02" title="Register" note="Every job Seeko has seen, mirrored to Notion when it is connected.">
-      <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-[minmax(12rem,1fr)_9rem_10rem_10rem]">
-        <Field label="Search"><input className={inputCls} placeholder="Title or company" value={f.q} onChange={e => setF({ ...f, q: e.target.value })} /></Field>
+      <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-[minmax(12rem,1fr)_8rem_8rem_9rem_9rem]">
+        <Field label="Search" hint='Also searches saved descriptions. "exact phrase", -exclude, OR.'><input className={inputCls} placeholder="Title, company or description" value={f.q} onChange={e => setF({ ...f, q: e.target.value })} /></Field>
+        <Field label="Posting">
+          <select className={selectCls} value={f.state} onChange={e => setF({ ...f, state: e.target.value })}>
+            <option value="">All</option><option value="open">Open</option><option value="closed">Closed</option>
+          </select>
+        </Field>
         <Field label="Type">
           <select className={selectCls} value={f.job_type} onChange={e => setF({ ...f, job_type: e.target.value })}>
             <option value="">All</option><option value="job">Jobs</option><option value="internship">Internships</option>
@@ -109,7 +115,13 @@ function Register() {
         </Field>
       </div>
 
-      <div className="mt-8 overflow-x-auto">
+      <div className="mt-6 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[13px]">
+        <span className="text-mute">{jobs ? `${jobs.length}${jobs.length === 500 ? '+' : ''} shown` : ''}</span>
+        <a className={linkBtnCls} href={`/api/jobs/export?format=csv${qs ? '&' + qs : ''}`}>Export CSV ↓</a>
+        <a className={linkBtnCls} href={`/api/jobs/export?format=json${qs ? '&' + qs : ''}`}>Export JSON ↓</a>
+        <span className="text-[12px] text-mute">Includes the full job descriptions.</span>
+      </div>
+      <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[880px] border-collapse text-left">
           <thead className="border-y-2 border-rule text-[11px] text-mute">
             <tr>
@@ -124,7 +136,8 @@ function Register() {
                 <td className="py-3.5 pr-4 font-mono text-[11px] text-mute">{pad(i + 1, 3)}</td>
                 <td className="py-3.5 pr-4"><a className="font-semibold tracking-[-0.005em] underline decoration-transparent underline-offset-4 hover:decoration-accent" href={j.url} target="_blank" rel="noreferrer">{j.title}</a></td>
                 <td className="py-3.5 pr-4">{j.company}</td>
-                <td className="py-3.5 pr-4 text-[12px] font-semibold uppercase tracking-[0.08em]">{j.job_type === 'internship' ? 'Internship' : <span className="text-mute">Job</span>}{j.is_remote && <span className="ml-1.5 font-normal normal-case tracking-normal text-mute">· remote</span>}</td>
+                <td className="py-3.5 pr-4 text-[12px] font-semibold uppercase tracking-[0.08em]">{j.job_type === 'internship' ? 'Internship' : <span className="text-mute">Job</span>}{j.is_remote && <span className="ml-1.5 font-normal normal-case tracking-normal text-mute">· remote</span>}
+                  {j.closed_at && <span className="block text-[11px] text-warn" title={`No longer listed or expired since ${j.closed_at.slice(0, 10)}`}>Closed</span>}</td>
                 <td className="py-3.5 pr-4 text-mute">{j.source}</td>
                 <td className="py-3.5 pr-4 text-right text-[18px] font-bold tracking-[-0.02em] tabular-nums">{j.score ?? <span className="text-mute">—</span>}</td>
                 <td className="py-3.5 pr-4"><Badge s={j.status} /></td>
@@ -153,11 +166,14 @@ function Searches() {
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t) }, [load])
   const start = () => a.run(async () => { const r = await api('/search/runs', { method: 'POST' }); setTimeout(load, 800); return `Search ${r.run_id} started.` })
   const resume = (id: string) => a.run(async () => { await api(`/search/runs/${id}/resume`, { method: 'POST' }); setTimeout(load, 800); return `Resuming ${id} from its last checkpoint.` })
+  const stop = () => a.run(async () => { const r = await api('/search/cancel', { method: 'POST' }); setTimeout(load, 800); return `Stopping ${r.run_id} — it can be resumed later.` })
 
   return (
     <Section n="03" title="Searches" note="Each run browses your sources, skips anything already in the database, and saves new jobs and internships with their full description.">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-ink pb-4">
-        <button className={btnCls} disabled={a.busy || !!d?.running} onClick={start}>{d?.running ? 'Searching…' : 'Search now'}</button>
+        {d?.running
+          ? <button className={btn2Cls} disabled={a.busy} onClick={stop}>Stop search</button>
+          : <button className={btnCls} disabled={a.busy} onClick={start}>Search now</button>}
         <span className="max-w-[60ch] text-[13px] text-mute">Known postings are recognised by link or by company and title, and are not opened again. A CAPTCHA or login wall stops that source for the run.</span>
       </div>
       <Msg m={a.msg} />
@@ -170,14 +186,16 @@ function Searches() {
           <tbody>
             {d?.runs.map(r => {
               const s = r.stats, rej = Object.entries(s.rejected ?? {}), blocked = Object.entries(s.blocked ?? {})
+              const skipped = Object.entries(s.skipped_sources ?? {}), live = r.status === 'running' ? s.progress : undefined
               return (
                 <tr key={r.id} className="border-b border-hair align-baseline">
                   <td className="py-3 pr-4 font-mono text-[12px] tabular-nums">{when(r.started_at)}<span className="ml-2 text-mute">{r.trigger}</span></td>
                   <td className={`py-3 pr-4 text-[11px] font-semibold uppercase tracking-[0.1em] ${RUN_TONE[r.status] ?? ''}`}>
                     {r.status}
+                    {live && <span className="mt-1 block font-normal normal-case tracking-normal text-mute">{live.step}…</span>}
                     {(r.status === 'interrupted' || r.status === 'failed') && <button className={linkBtnCls + ' ml-3 normal-case tracking-normal'} disabled={a.busy || !!d?.running} onClick={() => resume(r.id)}>Resume</button>}
                   </td>
-                  <td className="py-3 pr-4 text-right tabular-nums">{s.leads ?? '—'}</td>
+                  <td className="py-3 pr-4 text-right tabular-nums">{s.leads ?? live?.leads ?? '—'}{live && !!live.read && <span className="block text-[11px] text-mute">{live.read} read</span>}</td>
                   <td className="py-3 pr-4 text-right tabular-nums text-mute">{s.known ?? '—'}</td>
                   <td className="py-3 pr-4 text-right tabular-nums">
                     <span className="text-[18px] font-bold tracking-[-0.02em]">{s.new ?? '—'}</span>
@@ -188,6 +206,8 @@ function Searches() {
                   </td>
                   <td className="py-3 text-[12.5px] leading-snug">
                     {blocked.map(([src, why]) => <span key={src} className="block text-accent">{src}: {why}</span>)}
+                    {skipped.map(([src, why]) => <span key={src} className="block text-warn">{src} skipped: {why}</span>)}
+                    {!!s.closed && <span className="block text-mute">{s.closed} posting{s.closed === 1 ? '' : 's'} closed</span>}
                     {!!s.deferred && <span className="block text-mute">{s.deferred} left for next run</span>}
                     {r.error && <span className="block text-warn">{r.error}</span>}
                   </td>

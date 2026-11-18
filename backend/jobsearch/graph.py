@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable
 import httpx
 from langgraph.graph import END, START, StateGraph
@@ -38,7 +38,7 @@ from .classify import _INTERN, title_matches
 from .extract import extract_posting, iso
 from .leads import board_leads, careers_leads
 from .spec import BROWSER_SOURCES, SearchSpec
-from .state import SearchInput, SearchOutput, SearchState
+from .state import SearchInput, SearchOutput, SearchState, merge_stats
 from .store import Store, job_id_for
 
 USER_AGENT = "Mozilla/5.0 (compatible; Seeko job search)"
@@ -100,6 +100,42 @@ def build_tasks(spec: SearchSpec) -> list[dict]:
     return tasks
 
 
+FULL_LIST_ATS = ("greenhouse", "lever", "ashby")   # their APIs return every open posting -> missing = closed
+
+
+def apply_limits(tasks: list[dict], recent: list[tuple[datetime, dict]], spec: SearchSpec, now: datetime) -> tuple[list[dict], dict]:
+    """Careful scheduling across runs. A browsed source that blocked us within `block_cooldown_h` is skipped; the
+    others get what is left of their `daily_pages` budget (page loads in the last 24 h). APIs are not limited.
+    `recent` is (started_at, stats) of earlier runs. Returns (tasks to run, per-source notes)."""
+    loads: Counter = Counter()
+    blocked: dict[str, tuple[datetime, str]] = {}
+    for started, stats in recent:
+        stats = stats or {}
+        if started >= now - timedelta(hours=24):
+            for src, s in (stats.get("sources") or {}).items():
+                loads[src] += int((s or {}).get("loads", 0) or 0)
+        if spec.block_cooldown_h and started >= now - timedelta(hours=spec.block_cooldown_h):
+            for src, why in (stats.get("blocked") or {}).items():
+                if src not in blocked or started > blocked[src][0]:
+                    blocked[src] = (started, why)
+    kept, notes = [], {}
+    for t in tasks:
+        src = t["source"]
+        if t["kind"] == "api":
+            kept.append(t)
+            continue
+        if src in blocked:
+            ago = max(0.0, (now - blocked[src][0]).total_seconds() / 3600)
+            notes[src] = {"skipped": f"blocked {ago:.1f} h ago ({blocked[src][1]}); cooling down for {spec.block_cooldown_h:g} h"}
+            continue
+        left = spec.daily_pages - loads[src]
+        if left <= 0:
+            notes[src] = {"skipped": f"daily page budget used ({loads[src]}/{spec.daily_pages} in 24 h)"}
+            continue
+        kept.append({**t, "budget": left})
+    return kept, notes
+
+
 class PageReview(BaseModel):
     is_job_posting: bool
     title: str = ""
@@ -125,13 +161,18 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
     async def plan(state: SearchState, config) -> dict:
         run_id = state.get("run_id") or config["configurable"]["thread_id"]
         spec = SearchSpec.model_validate(state["spec"]) if state.get("spec") else SearchSpec.from_profile()
-        tasks = build_tasks(spec)
+        planned = build_tasks(spec)
+        now = d.now()
+        recent = await asyncio.to_thread(d.store.recent_run_stats, now - timedelta(hours=max(24.0, spec.block_cooldown_h)))
+        tasks, notes = apply_limits(planned, recent, spec, now)
+        for src, note in notes.items():
+            d.log(f"job search {src}: skipped - {note['skipped']}", "warn")
         spec_json = spec.model_dump(mode="json")
         await asyncio.to_thread(d.store.start_run, run_id, spec_json, state.get("trigger") or "manual")
-        if not tasks:
+        if not planned:
             d.log("job search: nothing to search - add target roles and enable a source, or add career pages", "warn")
         stats = {t["source"]: {"queries_dropped": t["queries_dropped"]} for t in tasks if t.get("queries_dropped")}
-        return {"run_id": run_id, "spec": spec_json, "tasks": tasks, "source_stats": stats}
+        return {"run_id": run_id, "spec": spec_json, "tasks": tasks, "source_stats": merge_stats(stats, notes)}
 
     def route_collect(state: SearchState):
         tasks = state.get("tasks") or []
@@ -142,9 +183,10 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
         task, spec = payload["task"], SearchSpec.model_validate(payload["spec"])
         src, st = task["source"], Counter()
         extra: dict = {}
+        listings: list[dict] = []
         try:
             if task["kind"] == "api":
-                leads = await _collect_api(task, spec, st, extra)
+                leads = await _collect_api(task, spec, st, extra, listings)
             elif task["kind"] == "careers":
                 leads = await _collect_careers(task, spec, st, extra)
             else:
@@ -155,17 +197,24 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
             d.log(f"job search {src}: collect failed: {e}", "error")
         for lead in leads:
             lead["task"] = src
-        return {"leads": leads, "source_stats": {src: {"leads": len(leads), **st, **extra}}}
+        return {"leads": leads, "listings": listings, "source_stats": {src: {"leads": len(leads), **st, **extra}}}
 
-    async def _collect_api(task, spec: SearchSpec, st: Counter, extra: dict) -> list[dict]:
+    async def _collect_api(task, spec: SearchSpec, st: Counter, extra: dict, listings: list[dict]) -> list[dict]:
         errors: list[str] = []
         known = d.store.is_known_url
 
         def want(title: str, url: str) -> bool:      # Workday: skip description calls for irrelevant/known jobs
             return title_matches(title, spec.role_titles) and not known(url)
 
+        found = []
         async with d.http() as client:
-            found = await fetch_watchlist(task["targets"], client, want=want, errors=errors)
+            for target in task["targets"]:
+                errs: list[str] = []
+                got = await fetch_watchlist([target], client, want=want, errors=errs)
+                errors += errs; found += got
+                ats = detect_ats(target)
+                if not errs and ats and ats[0] in FULL_LIST_ATS:   # complete board: anything not on it has closed
+                    listings.append({"source": ats[0], "company": ats[1], "urls": sorted({canonical_url(p.url) for p in got})})
         if errors:
             st["errors"] += len(errors); extra["error_details"] = errors[:5]
             for e in errors: d.log(f"job search: career board failed: {e}", "warn")
@@ -199,28 +248,34 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
         seen: set[str] = set()
         cap = spec.max_details * 3
         async with d.browser(board.source, spec.headless) as ctx:
-            sess = Session(ctx, Pacer(spec.delay_min_s, spec.delay_max_s))
-            for q in task["queries"]:
-                for page_no in range(spec.max_pages):
-                    url = board.search_url(q["query"], q["location"], page_no, q["internship"])
-                    if not url:
-                        break
-                    read = await sess.read_listing(url)
-                    st["pages"] += 1
-                    if read.blocked:
-                        extra["blocked"] = read.blocked
-                        d.log(f"job search {board.source}: stopped, {read.blocked} at {read.url}", "warn")
-                        return leads
-                    if read.error:
-                        st["errors"] += 1
-                        break
-                    found = board_leads(read.anchors, board)
-                    fresh = [lead for lead in found if lead["canonical_url"] not in seen]
-                    if not fresh:
-                        break                           # past the last page of results
-                    leads += [lead for lead in fresh if _keep(lead, spec, st, seen)]
-                    if len(leads) >= cap:
-                        return leads
+            sess = Session(ctx, Pacer(spec.delay_min_s, spec.delay_max_s), max_loads=task.get("budget"))
+            try:
+                for q in task["queries"]:
+                    for page_no in range(spec.max_pages):
+                        url = board.search_url(q["query"], q["location"], page_no, q["internship"])
+                        if not url:
+                            break
+                        read = await sess.read_listing(url)
+                        if read.exhausted:
+                            extra["budget_exhausted"] = True
+                            return leads
+                        st["pages"] += 1
+                        if read.blocked:
+                            extra["blocked"] = read.blocked
+                            d.log(f"job search {board.source}: stopped, {read.blocked} at {read.url}", "warn")
+                            return leads
+                        if read.error:
+                            st["errors"] += 1
+                            break
+                        found = board_leads(read.anchors, board)
+                        fresh = [lead for lead in found if lead["canonical_url"] not in seen]
+                        if not fresh:
+                            break                           # past the last page of results
+                        leads += [lead for lead in fresh if _keep(lead, spec, st, seen)]
+                        if len(leads) >= cap:
+                            return leads
+            finally:
+                st["loads"] += sess.loads
         return leads
 
     async def _collect_careers(task, spec: SearchSpec, st: Counter, extra: dict) -> list[dict]:
@@ -229,34 +284,45 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
         blocked: list[str] = []
         async with d.http() as client, d.browser("search", spec.headless) as ctx:
             robots = Robots(spec.respect_robots, client)
-            sess = Session(ctx, Pacer(spec.delay_min_s, spec.delay_max_s))
-            for target in task["targets"]:
-                if not await robots.allowed(target):
-                    st["robots_disallowed"] += 1
-                    d.log(f"job search: robots.txt disallows {target}; skipped", "warn")
-                    continue
-                read = await sess.read_listing(target)
-                pages = 1
-                while True:
-                    st["pages"] += 1
-                    if read.blocked:
-                        blocked.append(f"{target}: {read.blocked}")
-                        d.log(f"job search careers: stopped at {target} ({read.blocked})", "warn")
-                        break
-                    if read.error:
-                        st["errors"] += 1
-                        break
-                    fresh = [x for x in careers_leads(read.anchors, target) if x["canonical_url"] not in seen]
-                    leads += [x for x in fresh if _keep(x, spec, st, seen)]
-                    if not fresh or pages >= spec.max_pages:
-                        break
-                    nxt = await sess.more()
-                    if nxt is None:
-                        break
-                    read, pages = nxt, pages + 1
+            sess = Session(ctx, Pacer(spec.delay_min_s, spec.delay_max_s), max_loads=task.get("budget"))
+            try:
+                await _careers_targets(task, spec, st, extra, sess, robots, leads, seen, blocked)
+            finally:
+                st["loads"] += sess.loads
         if blocked:
             extra["blocked_targets"] = blocked
         return leads
+
+    async def _careers_targets(task, spec, st, extra, sess, robots, leads, seen, blocked) -> None:
+        for target in task["targets"]:
+            if not await robots.allowed(target):
+                st["robots_disallowed"] += 1
+                d.log(f"job search: robots.txt disallows {target}; skipped", "warn")
+                continue
+            read = await sess.read_listing(target)
+            pages = 1
+            while True:
+                if read.exhausted:
+                    extra["budget_exhausted"] = True
+                    break
+                st["pages"] += 1
+                if read.blocked:
+                    blocked.append(f"{target}: {read.blocked}")
+                    d.log(f"job search careers: stopped at {target} ({read.blocked})", "warn")
+                    break
+                if read.error:
+                    st["errors"] += 1
+                    break
+                fresh = [x for x in careers_leads(read.anchors, target) if x["canonical_url"] not in seen]
+                leads += [x for x in fresh if _keep(x, spec, st, seen)]
+                if not fresh or pages >= spec.max_pages:
+                    break
+                nxt = await sess.more()
+                if nxt is None:
+                    break
+                read, pages = nxt, pages + 1
+            if extra.get("budget_exhausted"):
+                break
 
     # ── dedupe against the database ─────────────────────────────────────────────────────────────────────────
     async def dedupe(state: SearchState) -> dict:
@@ -293,22 +359,36 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
 
     def route_fetch(state: SearchState):
         pending = state.get("pending") or {}
-        return [Send("fetch", {"task": src, "leads": ls, "spec": state["spec"]}) for src, ls in pending.items() if ls] or "screen"
+        budgets = {t["source"]: t.get("budget") for t in state.get("tasks") or []}
+        used = state.get("source_stats") or {}
+        sends = []
+        for src, ls in pending.items():
+            if not ls:
+                continue
+            b = budgets.get(src)
+            left = None if b is None else max(0, b - int(used.get(src, {}).get("loads", 0)))
+            sends.append(Send("fetch", {"task": src, "leads": ls, "spec": state["spec"], "budget": left}))
+        return sends or "screen"
 
     # ── fetch postings ──────────────────────────────────────────────────────────────────────────────────────
     async def fetch(payload: dict) -> dict:
         src, leads, spec = payload["task"], payload["leads"], SearchSpec.model_validate(payload["spec"])
         board = BOARDS.get(src)
         st, extra, out = Counter(), {}, []
+        sess = None
         try:
             async with d.http() as client, d.browser(board.source if board else "search", spec.headless) as ctx:
                 robots = Robots(spec.respect_robots and board is None, client)
-                sess = Session(ctx, Pacer(spec.delay_min_s, spec.delay_max_s))
-                for lead in leads:
+                sess = Session(ctx, Pacer(spec.delay_min_s, spec.delay_max_s), max_loads=payload.get("budget"))
+                for i, lead in enumerate(leads):
                     if not await robots.allowed(lead["url"]):
                         st["robots_disallowed"] += 1
                         continue
                     read = await sess.read_detail(lead["url"], board.description_selector if board else "")
+                    if read.exhausted:
+                        extra["budget_exhausted"] = True
+                        st["deferred"] += len(leads) - i      # read on a later run, once the budget refills
+                        break
                     if read.blocked:
                         extra["blocked"] = read.blocked
                         d.log(f"job search {src}: stopped, {read.blocked} at {read.url}", "warn")
@@ -329,6 +409,8 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
         except Exception as e:
             st["errors"] += 1; extra["error"] = f"{type(e).__name__}: {e}"[:300]
             d.log(f"job search {src}: fetch failed: {e}", "error")
+        if sess is not None:
+            st["loads"] += sess.loads
         return {"postings": out, "source_stats": {src: {**st, **extra}}}
 
     # ── screen ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -407,13 +489,15 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
     # ── persist + finish ────────────────────────────────────────────────────────────────────────────────────
     async def persist(state: SearchState) -> dict:
         res = await asyncio.to_thread(d.store.persist_run, state["run_id"], state.get("accepted") or [],
-                                      state.get("known") or [], [r for r in state.get("rejected") or [] if r.get("record")])
-        return {"new_job_ids": res["new_job_ids"]}
+                                      state.get("known") or [], [r for r in state.get("rejected") or [] if r.get("record")],
+                                      state.get("listings") or [])
+        return {"new_job_ids": res["new_job_ids"], "stats": {"closed": res["closed"], "reopened": res["reopened"]}}
 
     async def finish(state: SearchState) -> dict:
         new_ids = set(state.get("new_job_ids") or [])
         new_by_type = Counter(p.get("job_type", "job") for p in state.get("accepted") or [] if job_id_for(p["url"]) in new_ids)
         sources = state.get("source_stats") or {}
+        saved = state.get("stats") or {}          # closures reported by persist
         stats = {
             "leads": len({x["canonical_url"] for x in state.get("leads") or []}),
             "known": len(state.get("known") or []),
@@ -425,6 +509,9 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
             "deferred": sum(int(s.get("deferred", 0)) for s in sources.values()),
             "blocked": {k: v["blocked"] for k, v in sources.items() if v.get("blocked")},
             "errors": sum(int(s.get("errors", 0)) for s in sources.values()),
+            "closed": int(saved.get("closed", 0)),
+            "reopened": int(saved.get("reopened", 0)),
+            "skipped_sources": {k: v["skipped"] for k, v in sources.items() if v.get("skipped")},
             "sources": sources,
         }
         await asyncio.to_thread(d.store.finish_run, state["run_id"], "done", stats)
@@ -432,6 +519,7 @@ def build_graph(deps: Deps | None = None) -> StateGraph:
         d.log(f"job search {state['run_id']}: {stats['leads']} found, {stats['known']} already known, "
               f"{stats['new']} new ({stats['new_jobs']} jobs, {stats['new_internships']} internships), "
               f"{sum(stats['rejected'].values())} rejected" + (f", {stats['deferred']} left for next run" if stats["deferred"] else "")
+              + (f", {stats['closed']} closed" if stats["closed"] else "")
               + (f"; {blocked}" if blocked else ""), "warn" if blocked else "info")
         return {"stats": stats, "new_job_ids": sorted(new_ids)}
 

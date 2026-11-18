@@ -45,6 +45,15 @@ plan → collect (per source, in parallel) → dedupe → fetch (per source) →
   posting age and expiry, excluded companies, and a real description. Pages with no structured data are double-checked by your model.
 - **Polite browsing.** Jittered 3–8 s delays, page and detail budgets per source (the rest is picked up next run), robots.txt on careers
   pages, and the first CAPTCHA / login wall / HTTP 429 stops that source for the run. Nothing tries to get past a bot check.
+  Across runs (e.g. scheduled discovery): each browsed site gets at most `SEARCH_DAILY_PAGES` page loads per 24 h, and a site that
+  blocked a run is left alone for `SEARCH_BLOCK_COOLDOWN_H` hours.
+- **Closed postings.** When a Greenhouse / Lever / Ashby board no longer lists a saved job, or its stated expiry date passes, the job is
+  marked closed (`closed_at`) and the worker no longer tailors or applies to it; it reopens if it is seen again.
+- **Find and export.** The Tracker search (and `GET /api/jobs?q=`) is full-text over title, company and the saved description, using a
+  PostgreSQL GIN index with web-search syntax (`"exact phrase"`, `-exclude`, `OR`). *Export CSV / JSON* downloads the filtered jobs with
+  their full descriptions (`/api/jobs/export`).
+- **Control.** Tracker → Searches shows the step a run is on, *Stop search* ends it cleanly (it can be resumed), and every finished run
+  records what it found, skipped, closed and why.
 - **What is stored.** `jobs` (full description as text, `job_type` job|internship, posted/expiry dates, remote, source of the text,
   times seen), `search_runs` (spec + statistics per run), `job_sightings`, `seen_urls`, and LangGraph checkpoints — an interrupted run
   resumes where it stopped (Tracker → Searches → *Resume*, or the CLI). Schema changes are Alembic migrations, applied at startup;
@@ -54,7 +63,8 @@ CLI, from `backend/`:
 ```bash
 .venv/bin/python -m jobsearch run                              # profile + settings
 .venv/bin/python -m jobsearch run --title "Data Analyst" --type internship --source internshala --location Kochi
-.venv/bin/python -m jobsearch runs | jobs --type internship | show <job_id> | resume <run_id> | db
+.venv/bin/python -m jobsearch runs | jobs --type internship --q "django -senior" | show <job_id> | resume <run_id> | db
+.venv/bin/python -m jobsearch export --format csv -o jobs.csv   # all jobs with descriptions (Ctrl-C a run: resume it later)
 ```
 LangGraph Studio: `pip install "langgraph-cli[inmem]"` and `langgraph dev` in `backend/` (graph `job_search`, see `langgraph.json`).
 

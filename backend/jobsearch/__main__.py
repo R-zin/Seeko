@@ -5,7 +5,8 @@
     .venv/bin/python -m jobsearch runs                     # recent runs and what they found
     .venv/bin/python -m jobsearch run-info <run_id>        # jobs a run found (new vs already known)
     .venv/bin/python -m jobsearch resume <run_id>          # continue an interrupted run from its checkpoint
-    .venv/bin/python -m jobsearch jobs --type internship   # stored jobs/internships
+    .venv/bin/python -m jobsearch jobs --type internship --q "django -senior"   # stored jobs, full-text search
+    .venv/bin/python -m jobsearch export --format csv -o jobs.csv              # everything, with descriptions
     .venv/bin/python -m jobsearch show <job_id>            # one job with its full description
     .venv/bin/python -m jobsearch db                       # which database is in use, row counts
 """
@@ -31,7 +32,9 @@ def _print_result(res: dict) -> None:
     print(f"run {res['run_id']}: {st.get('leads', 0)} found, {st.get('known', 0)} already known, {st.get('new', 0)} new "
           f"({st.get('new_jobs', 0)} jobs, {st.get('new_internships', 0)} internships)")
     if st.get("rejected"): print("rejected: " + ", ".join(f"{k}={v}" for k, v in sorted(st["rejected"].items())))
-    if st.get("deferred"): print(f"left for the next run (detail budget): {st['deferred']}")
+    if st.get("deferred"): print(f"left for the next run (budget): {st['deferred']}")
+    if st.get("closed"): print(f"postings closed (gone from their board or expired): {st['closed']}")
+    for src, why in (st.get("skipped_sources") or {}).items(): print(f"SKIPPED {src}: {why}")
     for src, why in (st.get("blocked") or {}).items(): print(f"BLOCKED {src}: {why} - stopped that source; nothing was bypassed")
     for src, s in (st.get("sources") or {}).items():
         if s.get("blocked_targets"): print(f"blocked careers pages: {'; '.join(s['blocked_targets'])}")
@@ -39,7 +42,7 @@ def _print_result(res: dict) -> None:
 
 
 async def _run(a) -> int:
-    from jobsearch.service import RunInProgress, run_search
+    from jobsearch.service import RunCancelled, RunInProgress, run_search
     from jobsearch.spec import SearchSpec
     o = {"role_titles": a.title, "locations": a.location, "job_types": a.type, "sources": a.source,
          "max_details": a.max_details, "watchlist_urls": a.url}
@@ -53,6 +56,8 @@ async def _run(a) -> int:
     try:
         res = await run_search(spec, trigger="cli")
     except RunInProgress as e:
+        print(e, file=sys.stderr); return 1
+    except RunCancelled as e:
         print(e, file=sys.stderr); return 1
     _print_result(res)
     return 0
@@ -86,6 +91,12 @@ def main(argv: list[str] | None = None) -> int:
     j.add_argument("--type", choices=["job", "internship"]); j.add_argument("--status")
     j.add_argument("--days", type=int, help="first found within N days"); j.add_argument("--limit", type=int, default=50)
     j.add_argument("--json", action="store_true")
+    j.add_argument("--q", help="full-text search in title, company and description")
+    j.add_argument("--state", choices=["open", "closed"])
+    e = sub.add_parser("export", help="jobs with full descriptions as CSV or JSON")
+    e.add_argument("--format", choices=["csv", "json"], default="csv"); e.add_argument("-o", "--output", help="file (default stdout)")
+    e.add_argument("--type", choices=["job", "internship"]); e.add_argument("--state", choices=["open", "closed"])
+    e.add_argument("--q")
     s = sub.add_parser("show", help="one job with its full description"); s.add_argument("job_id")
     s = sub.add_parser("import-sqlite", help="copy jobs from an old SQLite database (only into an empty one)")
     s.add_argument("path", nargs="?")
@@ -98,10 +109,13 @@ def main(argv: list[str] | None = None) -> int:
     from db import Job, JobSighting, SearchRun, SeenUrl, SessionLocal, utcnow
     from jobsearch.store import Store
 
-    if a.cmd == "run":
-        return asyncio.run(_run(a))
-    if a.cmd == "resume":
-        return asyncio.run(_resume(a))
+    if a.cmd in ("run", "resume"):
+        try:
+            return asyncio.run(_run(a) if a.cmd == "run" else _resume(a))
+        except KeyboardInterrupt:
+            print("\nstopped; the run is marked interrupted - continue it with `python -m jobsearch resume <run_id>`",
+                  file=sys.stderr)
+            return 130
     if a.cmd == "runs":
         rows = [[r["id"], r["status"], r["trigger"], (r["started_at"] or "")[:16], r["stats"].get("leads", ""),
                  r["stats"].get("known", ""), r["stats"].get("new", ""), ",".join(r["stats"].get("blocked", {}) or [])]
@@ -116,18 +130,33 @@ def main(argv: list[str] | None = None) -> int:
                       for x in r["jobs"]], ["", "type", "title", "company", "location", "id"]))
         return 0
     if a.cmd == "jobs":
+        from jobsearch.store import jobs_query
         with SessionLocal() as ses:
-            q = select(Job).order_by(Job.discovered_at.desc()).limit(a.limit)
-            if a.type: q = q.where(Job.job_type == a.type)
-            if a.status: q = q.where(Job.status == a.status)
-            if a.days: q = q.where(Job.discovered_at >= utcnow() - timedelta(days=a.days))
-            jobs = list(ses.scalars(q))
+            since = utcnow() - timedelta(days=a.days) if a.days else None
+            jobs = list(ses.scalars(jobs_query(ses, job_type=a.type, status=a.status, state=a.state, q=a.q, since=since,
+                                               limit=a.limit)))
         if a.json:
             from api.jobs import ser
             print(json.dumps([ser(x) | {"jd_text": x.jd_text} for x in jobs], indent=2)); return 0
         print(_table([[x.id, x.job_type, x.title, x.company, x.location, x.source, x.status, x.times_seen,
-                       x.discovered_at.date()] for x in jobs],
-                     ["id", "type", "title", "company", "location", "source", "status", "seen", "found"]))
+                       x.discovered_at.date(), "closed" if x.closed_at else ""] for x in jobs],
+                     ["id", "type", "title", "company", "location", "source", "status", "seen", "found", ""]))
+        return 0
+    if a.cmd == "export":
+        import csv
+        from api.jobs import EXPORT_COLUMNS, export_rows
+        from jobsearch.store import jobs_query
+        with SessionLocal() as ses:
+            rows = export_rows(list(ses.scalars(jobs_query(ses, job_type=a.type, state=a.state, q=a.q, limit=None))))
+        out = open(a.output, "w", newline="", encoding="utf-8") if a.output else sys.stdout
+        try:
+            if a.format == "json":
+                json.dump(rows, out, ensure_ascii=False, indent=1); out.write("\n")
+            else:
+                w = csv.DictWriter(out, fieldnames=EXPORT_COLUMNS); w.writeheader(); w.writerows(rows)
+        finally:
+            if a.output: out.close()
+        if a.output: print(f"wrote {len(rows)} job(s) to {a.output}", file=sys.stderr)
         return 0
     if a.cmd == "show":
         with SessionLocal() as ses:

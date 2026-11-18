@@ -216,3 +216,80 @@ async def test_nothing_to_search_finishes_cleanly(migrated):
 def test_graph_shape():
     g = build_graph(Deps(store=Store())).compile()
     assert set(g.get_graph().nodes) >= {"plan", "collect", "dedupe", "fetch", "screen", "review", "persist", "finish"}
+
+
+async def test_daily_page_budget_spans_runs(migrated):
+    _, SL = migrated
+    spec = SPEC.model_copy(update={"daily_pages": 4})
+    site = Site()
+    res = await service.run_search(spec, deps=make_deps(SL, site))
+    careers = res["stats"]["sources"]["careers"]
+    assert careers["loads"] == 4 and careers.get("budget_exhausted")
+    assert len([u for u in site.hits if "/careers" in u]) == 4                # never more page loads than the budget
+    assert res["stats"]["deferred"] >= 1                                       # the rest waits for the budget to refill
+    site2, logs = Site(), []
+    res2 = await service.run_search(spec, deps=make_deps(SL, site2, logs=logs))
+    assert "budget" in res2["stats"]["skipped_sources"]["careers"] and not site2.hits
+    assert any("skipped" in m for _, m in logs)
+
+
+async def test_blocked_source_cools_down_on_the_next_run(migrated):
+    _, SL = migrated
+    spec = SPEC.model_copy(update={"sources": ["watchlist", "linkedin"]})
+    await service.run_search(spec, deps=make_deps(SL, Site()))
+    site2 = Site()
+    res2 = await service.run_search(spec, deps=make_deps(SL, site2))
+    assert "cooling down" in res2["stats"]["skipped_sources"]["linkedin"]
+    assert not [u for u in site2.hits if "linkedin.com" in u]                 # not touched again within the cooldown
+
+
+async def test_ats_board_diff_closes_and_reopens_postings(migrated):
+    _, SL = migrated
+    board = {"jobs": [{"title": "Backend Engineer", "absolute_url": "https://boards.greenhouse.io/acme/jobs/1", "content": JD},
+                      {"title": "Backend Engineer Intern", "absolute_url": "https://boards.greenhouse.io/acme/jobs/2", "content": JD}]}
+    listed = {"jobs": board["jobs"]}
+    deps = make_deps(SL, Site())
+    deps.http = lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=listed)))
+    spec = SPEC.model_copy(update={"watchlist_urls": ["https://boards.greenhouse.io/acme"], "locations": []})
+    assert (await service.run_search(spec, deps=deps))["stats"]["new"] == 2
+    listed["jobs"] = board["jobs"][:1]                                         # the internship was taken down
+    assert (await service.run_search(spec, deps=deps))["stats"]["closed"] == 1
+    with SL() as s:
+        assert [j.title for j in s.scalars(select(Job).where(Job.closed_at.is_not(None)))] == ["Backend Engineer Intern"]
+    listed["jobs"] = board["jobs"]                                             # ...and put back up
+    assert (await service.run_search(spec, deps=deps))["stats"]["reopened"] == 1
+
+
+async def test_stop_a_running_search_without_touching_the_caller(migrated):
+    import asyncio
+    _, SL = migrated
+    started = asyncio.Event()
+
+    @asynccontextmanager
+    async def hanging_browser(profile, headless):
+        started.set()
+        await asyncio.Event().wait()           # a page that never finishes loading
+        yield None
+
+    deps = make_deps(SL, Site())
+    deps.browser = hanging_browser
+    run = asyncio.create_task(service.run_search(SPEC, run_id="stop-me", deps=deps))
+    await asyncio.wait_for(started.wait(), 10)
+    assert service.current_run_id() == "stop-me" and service.cancel() == "stop-me"
+    with pytest.raises(service.RunCancelled):
+        await run
+    assert not run.cancelled()                 # the caller (e.g. the worker loop) is not cancelled with it
+    r = Store(SL).get_run("stop-me")
+    assert r["status"] == "interrupted" and service.cancel() is None and not service.is_running()
+
+
+async def test_progress_is_written_while_running(migrated):
+    _, SL = migrated
+    deps = make_deps(SL, Site())
+    steps = []
+    real = deps.store.set_progress
+    deps.store.set_progress = lambda run_id, progress, sources: (steps.append(dict(progress)), real(run_id, progress, sources))
+    await service.run_search(SPEC, deps=deps)
+    names = [p["step"] for p in steps]
+    assert names[:2] == ["collecting leads", "collecting leads"] and "reading postings" in names and "screening" in names
+    assert steps[-1]["leads"] == 6 and steps[-1]["read"] >= 4

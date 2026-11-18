@@ -32,7 +32,15 @@ async def start(body: RunRequest | None = None):
 
 @router.get("/runs")
 def runs(limit: int = 20):
-    return {"running": service.is_running(), "runs": Store().list_runs(min(max(limit, 1), 100))}
+    return {"running": service.is_running(), "current": service.current_run_id(),
+            "runs": Store().list_runs(min(max(limit, 1), 100))}
+
+
+@router.post("/cancel")
+def cancel():
+    run_id = service.cancel()
+    if run_id is None: raise HTTPException(409, "no job search is running")
+    return {"run_id": run_id, "stopping": True}
 
 
 @router.get("/runs/{run_id}")
@@ -54,6 +62,6 @@ async def resume(run_id: str):
     async def go():
         try: await service.resume_run(run_id)
         except LookupError: log(f"job search {run_id}: no checkpoint to resume from (it was saved in memory only)", "warn")
-        except Exception: pass   # recorded on the run
+        except (service.RunCancelled, Exception): pass   # recorded on the run
     service.spawn(go())
     return {"run_id": run_id, "resumed": True}

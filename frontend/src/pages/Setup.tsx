@@ -200,6 +200,12 @@ function SourcesSection() {
               <input type="number" min={0} step={0.5} aria-label="Maximum delay" className={inputCls + ' tabular-nums'} value={s.search_delay_max_s} onChange={e => setS({ ...s, search_delay_max_s: +e.target.value })} />
             </div>
           </Field>
+          <Field label="Page loads per site, per 24 h" hint="Across all runs, so scheduled searches stay gentle.">
+            <input type="number" min={1} max={5000} className={inputCls + ' tabular-nums'} value={s.search_daily_pages} onChange={e => setS({ ...s, search_daily_pages: +e.target.value })} />
+          </Field>
+          <Field label="Pause a site after a block, hours" hint="After a CAPTCHA, login wall or rate limit. 0 = off.">
+            <input type="number" min={0} max={720} className={inputCls + ' tabular-nums'} value={s.search_block_cooldown_h} onChange={e => setS({ ...s, search_block_cooldown_h: +e.target.value })} />
+          </Field>
           <Field label="Indeed site" hint="Country site, e.g. in.indeed.com.">
             <input className={inputCls + ' font-mono text-[13px]'} value={s.indeed_host} onChange={e => setS({ ...s, indeed_host: e.target.value })} />
           </Field>

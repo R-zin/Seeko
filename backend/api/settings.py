@@ -8,7 +8,8 @@ router = APIRouter(prefix="/api")
 
 
 SEARCH_KEYS = ("search_max_queries", "search_max_pages", "search_max_details", "search_delay_min_s", "search_delay_max_s",
-               "search_revisit_days", "search_respect_robots", "search_llm_review", "indeed_host")
+               "search_revisit_days", "search_respect_robots", "search_llm_review", "indeed_host",
+               "search_daily_pages", "search_block_cooldown_h")
 
 
 class AppSettings(BaseModel):
@@ -18,6 +19,7 @@ class AppSettings(BaseModel):
     search_max_details: int | None = Field(None, ge=1, le=500); search_delay_min_s: float | None = Field(None, ge=0, le=120)
     search_delay_max_s: float | None = Field(None, ge=0, le=300); search_revisit_days: int | None = Field(None, ge=0, le=365)
     search_respect_robots: bool | None = None; search_llm_review: bool | None = None; indeed_host: str | None = None
+    search_daily_pages: int | None = Field(None, ge=1, le=5000); search_block_cooldown_h: float | None = Field(None, ge=0, le=720)
 
 
 @router.get("/settings")

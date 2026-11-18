@@ -82,7 +82,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
   return (
     <article>
       {/* Headline */}
-      <Kicker>{d.job_type === 'internship' ? 'Internship — ' : ''}{d.company} — {d.source}{d.location ? ` — ${d.location}` : ''}{d.is_remote ? ' — remote' : ''}</Kicker>
+      <Kicker>{d.closed_at ? <span className="text-warn">Closed {d.closed_at.slice(0, 10)} — </span> : ''}{d.job_type === 'internship' ? 'Internship — ' : ''}{d.company} — {d.source}{d.location ? ` — ${d.location}` : ''}{d.is_remote ? ' — remote' : ''}</Kicker>
       <h2 className="mt-3 text-[clamp(32px,4.2vw,56px)] font-bold leading-[0.98] tracking-[-0.035em]">{d.title}</h2>
       <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
         <Badge s={d.status} />
@@ -250,7 +250,7 @@ export default function Pipeline() {
                     <span className={`pt-0.5 font-mono text-[11px] ${on ? 'text-accent' : 'text-mute'}`}>{pad(jobs.indexOf(j) + 1, 3)}</span>
                     <span className="min-w-0">
                       <span className="block truncate text-[15px] font-semibold leading-tight tracking-[-0.01em]">{j.title}</span>
-                      <span className={`mt-1 block truncate text-[12.5px] ${on ? 'text-paper/70' : 'text-mute'}`}>{j.job_type === 'internship' && <span className={`font-semibold uppercase tracking-[0.08em] ${on ? 'text-paper' : 'text-ink'}`}>Internship · </span>}{j.company} · {j.source}{j.is_easy_apply ? ' · easy apply' : ''}</span>
+                      <span className={`mt-1 block truncate text-[12.5px] ${on ? 'text-paper/70' : 'text-mute'}`}>{j.closed_at && <span className={on ? 'text-paper' : 'text-warn'}>Closed · </span>}{j.job_type === 'internship' && <span className={`font-semibold uppercase tracking-[0.08em] ${on ? 'text-paper' : 'text-ink'}`}>Internship · </span>}{j.company} · {j.source}{j.is_easy_apply ? ' · easy apply' : ''}</span>
                       <span className="mt-2 block">{on ? <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-paper/80">{j.status.replace('_', ' ')}</span> : <Badge s={j.status} />}</span>
                     </span>
                     <span className={`text-right text-[26px] font-bold leading-none tracking-[-0.03em] tabular-nums ${j.score == null ? 'opacity-30' : ''}`}>{j.score ?? '—'}</span>

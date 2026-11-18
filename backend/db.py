@@ -26,6 +26,9 @@ PG_DATA_DIR = DATA_DIR / "postgres"
 LEGACY_SQLITE = DATA_DIR / "seeko.db"
 BASELINE_REVISION = "0001"
 JSONType = JSON().with_variant(JSONB(), "postgresql")
+# Full-text document for job search on PostgreSQL. Must stay identical to the GIN index in migration 0003.
+FTS_DOC = "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(company, '') || ' ' || coalesce(jd_text, ''))"
+UNMODELED_INDEXES = {"ix_jobs_fts"}   # expression index created by migration 0003 (PostgreSQL only)
 
 
 class Base(DeclarativeBase): pass
@@ -35,7 +38,7 @@ class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (UniqueConstraint("dedupe_key"), UniqueConstraint("canonical_url"),
                       Index("ix_jobs_status", "status"), Index("ix_jobs_job_type", "job_type"),
-                      Index("ix_jobs_discovered_at", "discovered_at"))
+                      Index("ix_jobs_discovered_at", "discovered_at"), Index("ix_jobs_closed_at", "closed_at"))
     id: Mapped[str] = mapped_column(String, primary_key=True)
     source: Mapped[str] = mapped_column(String)
     company: Mapped[str] = mapped_column(String)
@@ -67,6 +70,7 @@ class Job(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     times_seen: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     first_run_id: Mapped[str] = mapped_column(String, default="", server_default="")
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # gone from its board / expired (0003)
 
 
 class LogEntry(Base):
@@ -172,6 +176,16 @@ class _LazySessionmaker(sessionmaker):
 
 
 SessionLocal = _LazySessionmaker(expire_on_commit=False)
+
+
+def alembic_include_object(obj, name, type_, reflected, compare_to) -> bool:
+    """What Alembic compares: our tables only (LangGraph's checkpoint tables share the database), and not the
+    expression index that only migration 0003 knows about."""
+    if type_ == "table" and reflected and compare_to is None:
+        return name in Base.metadata.tables
+    if type_ == "index" and name in UNMODELED_INDEXES:
+        return False
+    return True
 
 
 def alembic_config():

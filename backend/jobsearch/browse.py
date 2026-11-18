@@ -92,16 +92,24 @@ class PageRead:
     status: int | None = None
     blocked: str | None = None
     error: str | None = None
+    exhausted: bool = False      # the source's page budget is used up; nothing was loaded
     html: str = ""
     info: dict = field(default_factory=dict)
     anchors: list[dict] = field(default_factory=list)
 
 
 class Session:
-    """One source's browser context with a single reused tab."""
-    def __init__(self, context: BrowserContext, pacer: Pacer, nav_timeout_ms: int = 30_000):
+    """One source's browser context with a single reused tab. `max_loads` caps page loads (the daily budget)."""
+    def __init__(self, context: BrowserContext, pacer: Pacer, nav_timeout_ms: int = 30_000, max_loads: int | None = None):
         self.context, self.pacer, self.nav_timeout_ms = context, pacer, nav_timeout_ms
+        self.max_loads, self.loads = max_loads, 0
         self._page: Page | None = None
+
+    def _spend(self) -> bool:
+        if self.max_loads is not None and self.loads >= self.max_loads:
+            return False
+        self.loads += 1
+        return True
 
     async def page(self) -> Page:
         if self._page is None or self._page.is_closed():
@@ -109,6 +117,8 @@ class Session:
         return self._page
 
     async def _goto(self, url: str) -> PageRead:
+        if not self._spend():
+            return PageRead(url=url, exhausted=True, error="page budget used up")
         page = await self.page()
         await self.pacer.wait()
         try:
@@ -166,6 +176,8 @@ class Session:
             try:
                 if not (await el.count() and await el.is_visible() and await el.is_enabled()):
                     continue
+                if not self._spend():
+                    return PageRead(url=page.url, exhausted=True, error="page budget used up")
                 await self.pacer.wait()
                 await el.click(timeout=5_000)
             except (PWTimeout, PWError):

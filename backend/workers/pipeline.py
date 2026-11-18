@@ -26,11 +26,13 @@ def _set(job_id: str, **kw) -> None:
 
 async def discover(trigger: str = "manual") -> int:
     """Run the LangGraph job search (jobsearch/graph.py); new jobs land as status 'scraped' for this worker."""
-    from jobsearch.service import RunInProgress, run_search
+    from jobsearch.service import RunCancelled, RunInProgress, run_search
     try:
         res = await run_search(trigger=trigger)
     except RunInProgress:
         log("discovery skipped: a job search is already running", "warn"); return 0
+    except RunCancelled:
+        return 0
     for jid in res["new_job_ids"]: asyncio.create_task(notion.sync_job(jid))
     return len(res["new_job_ids"])
 
@@ -150,7 +152,8 @@ async def loop() -> None:
                 jid = None
                 if llm_configured():
                     with SessionLocal() as s:
-                        j = s.query(Job).filter(Job.status.in_(["scraped", "scored", "tailoring", "tailored"])).order_by(Job.discovered_at).first()
+                        j = (s.query(Job).filter(Job.status.in_(["scraped", "scored", "tailoring", "tailored"]), Job.closed_at.is_(None))
+                             .order_by(Job.discovered_at).first())   # closed postings are not tailored or applied to
                         jid = j.id if j else None
                 if jid: await process_job(jid); continue
                 await notion.retry_dirty()

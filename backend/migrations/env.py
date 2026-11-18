@@ -4,14 +4,7 @@ from alembic import context
 import db
 
 target_metadata = db.Base.metadata
-APP_TABLES = set(target_metadata.tables)
-
-
-def include_object(obj, name, type_, reflected, compare_to):
-    # LangGraph's checkpoint tables share the database but are managed by langgraph-checkpoint-postgres.
-    if type_ == "table" and reflected and compare_to is None:
-        return name in APP_TABLES
-    return True
+include_object = db.alembic_include_object
 
 
 def _run(connection) -> None:

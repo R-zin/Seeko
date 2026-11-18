@@ -194,3 +194,24 @@ def test_build_tasks_routes_watchlist_by_kind():
     kinds = {t["source"]: t["kind"] for t in build_tasks(spec)}
     assert kinds == {"ats": "api", "careers": "careers", "linkedin": "board"}
     assert build_tasks(SearchSpec(sources=["linkedin"])) == []   # boards need target roles
+
+
+def test_apply_limits_cooldown_and_daily_budget():
+    from datetime import timedelta
+    from jobsearch.graph import apply_limits
+    now = datetime(2026, 11, 18, 12)
+    spec = SearchSpec(daily_pages=50, block_cooldown_h=12)
+    tasks = [{"source": "ats", "kind": "api"}, {"source": "linkedin", "kind": "board"},
+             {"source": "indeed", "kind": "board"}, {"source": "careers", "kind": "careers"}]
+    recent = [
+        (now - timedelta(hours=3), {"blocked": {"linkedin": "bot check"}, "sources": {"linkedin": {"loads": 4}}}),
+        (now - timedelta(hours=20), {"blocked": {"indeed": "http 429"}, "sources": {"indeed": {"loads": 30}, "careers": {"loads": 50}}}),
+        (now - timedelta(hours=30), {"sources": {"careers": {"loads": 500}}}),          # outside the 24 h window
+    ]
+    kept, notes = apply_limits(tasks, recent, spec, now)
+    assert [t["source"] for t in kept] == ["ats", "indeed"]                         # APIs are never limited
+    assert kept[1]["budget"] == 20                                                   # 50 - 30 loads today
+    assert "cooling down" in notes["linkedin"]["skipped"] and "bot check" in notes["linkedin"]["skipped"]
+    assert "budget" in notes["careers"]["skipped"]                                   # 50/50 used
+    kept, _ = apply_limits(tasks, recent, spec.model_copy(update={"block_cooldown_h": 0}), now)
+    assert "linkedin" in [t["source"] for t in kept]                                 # cooldown can be switched off
