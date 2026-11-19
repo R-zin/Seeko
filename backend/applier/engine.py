@@ -7,6 +7,7 @@ from llm.client import LLMClient
 from .detect import detect_page, detect_blockers
 from .extract import extract_fields, reveal_form, Field, loc
 from .mapper import map_fields
+from . import answers
 
 SUBMIT_SEL = ("button[type=submit], input[type=submit], button:has-text('Submit application'), "
               "button:has-text('Submit'), button:has-text('Apply'), [data-qa='btn-submit']")
@@ -19,6 +20,8 @@ class FillResult:
     needs_human: list[str] = field(default_factory=list)   # field labels we could not answer
     blockers: list[str] = field(default_factory=list)      # captcha / 2fa / login
     screenshot: str = ""; submitted: bool = False; steps: int = 1
+    questions: list[dict] = field(default_factory=list)    # required questions nobody could answer (for the answer bank)
+    from_bank: int = 0                                     # fields filled with your saved answers
 
     @property
     def ready(self) -> bool: return not self.needs_human and not self.blockers
@@ -49,8 +52,19 @@ async def _fill_one(page, f: Field, value) -> bool:
     except Exception: return False
 
 
+def _unanswered(res: FillResult, f: Field) -> None:
+    res.needs_human.append(f.label or f.name)
+    k = answers.field_key(f)
+    if k and all(q["key"] != k for q in res.questions):
+        res.questions.append({"key": k, "label": f.label or f.name, "kind": f.kind,
+                              "options": list(f.options) if f.kind in answers.CHOICE_KINDS else []})
+
+
 async def fill_application(page, profile: CandidateProfile, resume_tex: str, pdf_path: str | Path, job: dict,
-                           llm: LLMClient | None = None, screenshot_to: Path | None = None, max_steps: int = 6) -> FillResult:
+                           llm: LLMClient | None = None, screenshot_to: Path | None = None, max_steps: int = 6,
+                           bank: dict[str, str] | None = None, bank_facts: list[dict] | None = None) -> FillResult:
+    """Fill (never submit) an application. `bank` = your saved answers (key -> answer): used first for the fields
+    they fit; `bank_facts` are passed to the model so it can reuse them for differently worded questions."""
     res = FillResult(ats=await detect_page(page))
     for step in range(1, max_steps + 1):
         res.steps = step
@@ -66,16 +80,24 @@ async def fill_application(page, profile: CandidateProfile, resume_tex: str, pdf
                     continue
                 try: await loc(page, f).set_input_files(str(pdf_path)); res.filled += 1
                 except Exception: res.needs_human.append(f.label or f.name)
-        fm = await map_fields(fields, profile, resume_tex, job["title"], job["company"], job.get("jd_text", ""), llm)
-        by_id = {a.id: a for a in fm.answers}
+        saved = answers.lookup(fields, bank or {})      # your own answers first: no model involved
         for f in fields:
+            if f.id in saved and await _fill_one(page, f, saved[f.id]):
+                res.filled += 1; res.from_bank += 1
+            else:
+                saved.pop(f.id, None)
+        rest = [f for f in fields if f.id not in saved]
+        fm = await map_fields(rest, profile, resume_tex, job["title"], job["company"], job.get("jd_text", ""), llm,
+                              facts=bank_facts or [])
+        by_id = {a.id: a for a in fm.answers}
+        for f in rest:
             if f.kind == "file": continue
             a = by_id.get(f.id)
             if a is None or a.value is None or a.value == "" or not a.confident:
-                if f.required: res.needs_human.append(f.label or f.name)
+                if f.required: _unanswered(res, f)
                 continue
             if await _fill_one(page, f, a.value): res.filled += 1
-            elif f.required: res.needs_human.append(f.label or f.name)
+            elif f.required: _unanswered(res, f)
         nxt = page.locator(NEXT_SEL)
         if await nxt.count() and not await page.locator(SUBMIT_SEL).filter(has_text="Submit").count() and res.ready:
             await nxt.first.click(); await page.wait_for_load_state("domcontentloaded"); continue

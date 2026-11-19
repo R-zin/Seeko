@@ -44,6 +44,7 @@ async def test_loop_survives_a_crashing_job(session, monkeypatch):
     mk(session, "boom", "scraped"); calls = []
     async def bad(jid): calls.append(jid); P.state["running"] = False; raise RuntimeError("kaboom")
     monkeypatch.setattr(P, "process_job", bad)
+    monkeypatch.setattr(P, "llm_configured", lambda: True)   # else nothing is picked and the loop spins forever
     async def nosleep(_): pass
     monkeypatch.setattr(P.asyncio, "sleep", nosleep)
     P.state["paused"] = False
@@ -78,3 +79,97 @@ def test_worker_idle_without_llm_config(monkeypatch):
     assert not P.llm_configured()
     monkeypatch.setattr(P, "get_settings", lambda: S(llm_base_url="http://localhost:11434/v1"))
     assert P.llm_configured()
+
+
+def test_worker_leaves_jobs_the_user_already_handled(session):
+    mk(session, "mine", "tailored", application_status="interviewing")   # applied by hand, tracked in Notion
+    mk(session, "todo", "scored")
+    with session() as s:
+        assert [j.id for j in s.query(Job).filter(*P.WORKABLE)] == ["todo"]
+
+
+def test_submitting_marks_the_application_applied(session):
+    mk(session, "a", "applying"); mk(session, "b", "applying", application_status="offer")
+    P._set("a", status="applied"); P._set("b", status="applied")
+    with session() as s:
+        assert s.get(Job, "a").application_status == "applied" and s.get(Job, "b").application_status == "offer"
+
+
+def test_queue_order_deadline_mine_stage_score(session):
+    from datetime import timedelta
+    from db import utcnow
+    now = utcnow()
+    mk(session, "old_scraped", "scraped", relevance=0.9)
+    mk(session, "scored_low", "scored", score=61.0)
+    mk(session, "scored_high", "scored", score=90.0)
+    mk(session, "tailored", "tailored", score=70.0)
+    mk(session, "mine", "scraped", origin="user")
+    mk(session, "due_soon", "scraped", valid_through=now + timedelta(days=2))
+    mk(session, "waiting", "tailored", retry_at=now + timedelta(minutes=30))       # backing off after a timeout
+    order = []
+    with session() as s:
+        while (jid := P.next_job_id(s, now)):
+            order.append(jid)
+            s.get(Job, jid).status = "applied"; s.commit()
+    assert order == ["due_soon", "mine", "tailored", "scored_high", "scored_low", "old_scraped"]
+    with session() as s:
+        assert P.next_job_id(s, now + timedelta(hours=1)) == "waiting"
+
+
+async def test_transient_failures_retry_with_backoff_then_fail(session, monkeypatch):
+    import httpx, openai
+    monkeypatch.setattr(P, "load_profile", lambda: None); monkeypatch.setattr(P, "load_resume", lambda: "")
+    calls = []
+
+    async def flaky(*a, **k):
+        calls.append(1); raise httpx.ConnectTimeout("connect timed out")
+    monkeypatch.setattr(P, "score_job", flaky)
+    mk(session, "t", "scraped")
+    for n in (1, 2, 3):
+        await P.process_job("t")
+        with session() as s:
+            j = s.get(Job, "t")
+            assert (j.status, j.attempts) == ("scraped", n) and j.retry_at is not None and f"retry {n}/3" in j.error
+    await P.process_job("t")
+    with session() as s:
+        assert s.get(Job, "t").status == "failed"
+    assert P.retry("t") == "scraped"
+    with session() as s:
+        assert (s.get(Job, "t").attempts, s.get(Job, "t").retry_at) == (0, None)
+
+    async def broken(*a, **k): raise ValueError("model returned nonsense")
+    monkeypatch.setattr(P, "score_job", broken)
+    mk(session, "v", "scraped")
+    await P.process_job("v")
+    with session() as s:
+        assert s.get(Job, "v").status == "failed"                   # not transient: no retry
+    req = httpx.Request("POST", "http://llm.test")
+    assert P.is_transient(openai.RateLimitError("slow down", response=httpx.Response(429, request=req), body=None))
+    assert not P.is_transient(openai.AuthenticationError("bad key", response=httpx.Response(401, request=req), body=None))
+
+
+async def test_failure_while_tailoring_or_applying_resumes_from_the_last_finished_step(session, monkeypatch):
+    import httpx
+    mk(session, "x", "tailoring"); mk(session, "y", "applying")
+    P._failed("x", "x", httpx.ReadTimeout("read timed out")); P._failed("y", "y", TimeoutError())
+    with session() as s:
+        assert s.get(Job, "x").status == "scored" and s.get(Job, "y").status == "tailored"
+
+
+async def test_approve_all_ready_submits_only_complete_forms(session, monkeypatch):
+    submitted = []
+    async def fake_submit(page): submitted.append(page)
+    async def no_learn(job_id, page): return 0
+    monkeypatch.setattr(P, "submit", fake_submit); monkeypatch.setattr(P, "learn_from_page", no_learn)
+    mk(session, "ok", "needs_review"); mk(session, "q", "needs_review", waiting_on=["notice period"])
+    mk(session, "blocked", "needs_review", error="needs human: blockers=['captcha']")
+    try:
+        for jid in ("ok", "q", "blocked"):
+            P.pending[jid] = (_Closable(), _Closable(), f"page-{jid}")
+        assert P.ready_ids() == ["ok"]
+        assert await P.approve_ready() == ["ok"] and submitted == ["page-ok"]
+        with session() as s:
+            assert s.get(Job, "ok").status == "applied" and s.get(Job, "ok").application_status == "applied"
+            assert s.get(Job, "q").status == "needs_review"
+    finally:
+        P.pending.clear()

@@ -1,14 +1,74 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, type Job, type SearchRun } from '../api'
+import { APPLICATION_STATUSES, api, type Job, type SearchRun } from '../api'
 import { Badge, Field, Kicker, Msg, Section, btn2Cls, btnCls, inputCls, linkBtnCls, pad, useAction } from '../ui'
+import { ApplicationSelect, NotionMark } from '../tracking'
 
-const STATUSES = ['scraped', 'scored', 'tailoring', 'tailored', 'applying', 'needs_review', 'applied', 'failed', 'skipped']
-const SOURCES = ['greenhouse', 'lever', 'ashby', 'workday', 'careers', 'linkedin', 'indeed', 'glassdoor', 'internshala']
+const STATUSES = ['scraped', 'scored', 'tailoring', 'tailored', 'applying', 'needs_review', 'applied', 'failed', 'skipped', 'tracked']
+const SOURCES = ['greenhouse', 'lever', 'ashby', 'workday', 'careers', 'linkedin', 'indeed', 'glassdoor', 'internshala', 'manual']
 type SortKey = 'discovered_at' | 'score' | 'company' | 'title'
 
 const selectCls = inputCls + ' cursor-pointer pr-6 capitalize'
 
-/* 01 — Controls ---------------------------------------------------------- */
+/* 01 — Agenda ------------------------------------------------------------ */
+type AItem = { id: string; title: string; company: string; next_step: string; next_step_date: string | null; url: string
+  applied_at: string | null; valid_through: string | null; days?: number; when?: 'overdue' | 'today' | 'soon' }
+type AgendaT = { today: string; next_steps: AItem[]; follow_up: AItem[]; apply_by: AItem[]; review: number; questions: number; followup_after_days: number }
+
+function Agenda() {
+  const [a, setA] = useState<AgendaT | null>(null)
+  const act = useAction()
+  const load = useCallback(() => api<AgendaT>('/agenda').then(setA).catch(() => {}), [])
+  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t) }, [load])
+  const mark = (j: AItem, status: string) => act.run(async () => {
+    await api(`/jobs/${j.id}`, { method: 'PATCH', json: { application_status: status } }); load()
+    return `${j.title}: marked ${status === 'ghosted' ? 'no response' : status}.`
+  })
+  const col = (title: string, items: AItem[], empty: string, row: (j: AItem) => React.ReactNode) => (
+    <div>
+      <div className="flex items-baseline justify-between border-b border-ink pb-2"><Kicker>{title}</Kicker><span className="font-mono text-[12px] text-mute">{pad(items.length)}</span></div>
+      <ul>{items.map(j => <li key={j.id} className="border-b border-hair py-3 text-[13.5px]">{row(j)}</li>)}</ul>
+      {!items.length && <p className="py-3 text-[13px] text-mute">{empty}</p>}
+    </div>
+  )
+  const name = (j: AItem) => <a className="font-semibold underline decoration-transparent underline-offset-4 hover:decoration-accent" href={j.url} target="_blank" rel="noreferrer">{j.title}</a>
+
+  return (
+    <Section n="01" title="Agenda" note={a ? `What your search needs from you${a.review || a.questions ? '' : ' today'}.` : 'Loading…'}
+      aside={a && (a.review > 0 || a.questions > 0) ? <p className="mt-4 text-[13px] leading-relaxed">
+        {a.review > 0 && <a className="block text-accent underline underline-offset-4" href="#pipeline">{a.review} form{a.review === 1 ? '' : 's'} waiting for approval →</a>}
+        {a.questions > 0 && <a className="block text-accent underline underline-offset-4" href="#setup">{a.questions} question{a.questions === 1 ? '' : 's'} to answer →</a>}
+      </p> : undefined}>
+      {!a ? <div className="h-32 bg-paper-2" /> : <>
+        <div className="grid grid-cols-1 gap-x-8 gap-y-8 lg:grid-cols-3">
+          {col('Next steps', a.next_steps, 'Nothing booked this week.', j => <>
+            <span className={`block font-mono text-[12px] ${j.when === 'overdue' ? 'text-accent' : j.when === 'today' ? 'text-ink' : 'text-mute'}`}>
+              {j.next_step_date}{j.when === 'overdue' ? ' · overdue' : j.when === 'today' ? ' · today' : ''}</span>
+            <span className="block">{j.next_step || 'Next step'} — {name(j)} <span className="text-mute">at {j.company}</span></span>
+          </>)}
+          {col(`Follow up · ${a.followup_after_days}+ days`, a.follow_up, 'No application has gone quiet.', j => <>
+            {name(j)} <span className="text-mute">at {j.company} · applied {j.days} days ago</span>
+            <span className="mt-1 flex gap-4">
+              <button className={linkBtnCls} disabled={act.busy} onClick={() => mark(j, 'ghosted')}>No response</button>
+              <button className={linkBtnCls} disabled={act.busy} onClick={() => mark(j, 'rejected')}>Rejected</button>
+              <button className={linkBtnCls} disabled={act.busy} onClick={() => mark(j, 'interviewing')}>Interviewing</button>
+            </span>
+          </>)}
+          {col('Closing soon', a.apply_by, 'No deadline in the next 5 days.', j => <>
+            {name(j)} <span className="text-mute">at {j.company}</span>
+            <span className={`block font-mono text-[12px] ${(j.days ?? 9) <= 1 ? 'text-accent' : 'text-mute'}`}>closes {j.valid_through?.slice(0, 10)} · {j.days === 0 ? 'today' : `${j.days} day${j.days === 1 ? '' : 's'} left`}</span>
+          </>)}
+        </div>
+        <div className="mt-6 flex flex-wrap items-center gap-4">
+          <button className={btn2Cls} disabled={act.busy} onClick={() => act.run(async () => { await api('/agenda/digest', { method: 'POST' }); return 'Digest sent.' })}>Send digest now</button>
+          <span className="text-[12px] text-mute">Also sent by itself once a day — Setup → Notifications.</span>
+        </div>
+        <Msg m={act.msg} />
+      </>}
+    </Section>
+  )
+}
+
+/* 02 — Controls ---------------------------------------------------------- */
 function Controls() {
   const [s, setS] = useState<any>(null)
   const a = useAction()
@@ -20,7 +80,7 @@ function Controls() {
   }
 
   return (
-    <Section n="01" title="Controls" note="How much the assistant may do on its own.">
+    <Section n="02" title="Controls" note="How much the assistant may do on its own.">
       {!s ? <div className="h-24 bg-paper-2" /> : <>
         <Kicker>Submission mode</Kicker>
         <div role="radiogroup" aria-label="Submission mode" className="mt-3 grid grid-cols-1 border border-ink sm:grid-cols-2">
@@ -72,10 +132,11 @@ function Th({ k, sort, onSort, children, className = '' }: { k?: SortKey; sort: 
   )
 }
 
-/* 02 — Register ---------------------------------------------------------- */
+/* 03 — Register ---------------------------------------------------------- */
 function Register() {
   const [jobs, setJobs] = useState<Job[] | null>(null)
-  const [f, setF] = useState({ status: '', source: '', job_type: '', state: '', q: '' })
+  const [f, setF] = useState({ status: '', source: '', job_type: '', state: '', application_status: '', q: '' })
+  const [err, setErr] = useState('')
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString()
   const [sort, setSort] = useState<Sort>({ k: 'discovered_at', desc: true })
   const th = { sort, onSort: setSort }
@@ -95,10 +156,17 @@ function Register() {
     })
   }, [jobs, sort])
 
+  const setApplication = async (j: Job, v: string) => {
+    setErr('')
+    try {
+      const u = await api<Job>(`/jobs/${j.id}`, { method: 'PATCH', json: { application_status: v } })
+      setJobs(js => js?.map(x => x.id === u.id ? u : x) ?? js)
+    } catch (e: any) { setErr(e.message) }
+  }
 
   return (
-    <Section n="02" title="Register" note="Every job Seeko has seen, mirrored to Notion when it is connected.">
-      <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-[minmax(12rem,1fr)_8rem_8rem_9rem_9rem]">
+    <Section n="03" title="Register" note="Every job Seeko has seen, mirrored to Notion when it is connected.">
+      <div className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2 xl:grid-cols-[minmax(10rem,1fr)_6.5rem_7rem_8rem_8rem_8.5rem]">
         <Field label="Search" hint='Also searches saved descriptions. "exact phrase", -exclude, OR.'><input className={inputCls} placeholder="Title, company or description" value={f.q} onChange={e => setF({ ...f, q: e.target.value })} /></Field>
         <Field label="Posting">
           <select className={selectCls} value={f.state} onChange={e => setF({ ...f, state: e.target.value })}>
@@ -120,6 +188,11 @@ function Register() {
             <option value="">All</option>{SOURCES.map(x => <option key={x} value={x}>{x}</option>)}
           </select>
         </Field>
+        <Field label="Application">
+          <select className={selectCls.replace(' capitalize', '')} value={f.application_status} onChange={e => setF({ ...f, application_status: e.target.value })}>
+            <option value="">All</option>{APPLICATION_STATUSES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+        </Field>
       </div>
 
       <div className="mt-6 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[13px]">
@@ -128,13 +201,14 @@ function Register() {
         <a className={linkBtnCls} href={`/api/jobs/export?format=json${qs ? '&' + qs : ''}`}>Export JSON ↓</a>
         <span className="text-[12px] text-mute">Includes the full job descriptions.</span>
       </div>
+      {err && <Msg m={{ ok: false, text: err }} />}
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[880px] border-collapse text-left">
+        <table className="w-full min-w-[900px] border-collapse text-left">
           <thead className="border-y-2 border-rule text-[11px] text-mute">
             <tr>
               <th scope="col" className="w-12 py-3 pr-4 font-semibold uppercase tracking-[0.12em]">No.</th>
               <Th {...th} k="title">Role</Th><Th {...th} k="company">Company</Th><Th {...th}>Type</Th><Th {...th}>Source</Th>
-              <Th {...th} k="score" className="text-right">Score</Th><Th {...th}>Status</Th><Th {...th}>Notion</Th>
+              <Th {...th} k="score" className="text-right">Score</Th><Th {...th}>Status</Th><Th {...th}>Application</Th><Th {...th}>Notion</Th>
               <Th {...th} className="text-right">Seen</Th><Th {...th} k="discovered_at">Found</Th>
             </tr>
           </thead>
@@ -149,7 +223,11 @@ function Register() {
                 <td className="py-3.5 pr-4 text-mute">{j.source}</td>
                 <td className="py-3.5 pr-4 text-right text-[18px] font-bold tracking-[-0.02em] tabular-nums">{j.score ?? <span className="text-mute">—</span>}</td>
                 <td className="py-3.5 pr-4"><Badge s={j.status} /></td>
-                <td className="py-3.5 pr-4 font-mono text-[12px]">{j.notion_page_id ? 'synced' : <span className="text-mute">—</span>}</td>
+                <td className="py-1 pr-4 text-[13px]">
+                  <ApplicationSelect className="w-[8.25rem] border-transparent py-1 text-[13px] hover:border-hair" label={`Application status for ${j.title}`} value={j.application_status} onChange={v => setApplication(j, v)} />
+                  {j.next_step_date && <span className="block font-mono text-[11px] text-mute" title={j.next_step || 'Next step'}>next {j.next_step_date}</span>}
+                </td>
+                <td className="py-3.5 pr-4"><NotionMark j={j} /></td>
                 <td className="py-3.5 pr-4 text-right font-mono text-[12px] tabular-nums" title={j.last_seen_at ? `Last seen ${j.last_seen_at.slice(0, 10)}` : undefined}>{j.times_seen}×</td>
                 <td className="py-3.5 font-mono text-[12px] text-mute tabular-nums">{(j.applied_at ?? j.discovered_at).slice(0, 10)}</td>
               </tr>
@@ -163,7 +241,7 @@ function Register() {
   )
 }
 
-/* 03 — Searches --------------------------------------------------------- */
+/* 04 — Searches --------------------------------------------------------- */
 const RUN_TONE: Record<string, string> = { running: 'text-ink', done: 'text-ok', failed: 'text-accent', interrupted: 'text-warn' }
 const when = (iso: string) => iso.slice(0, 16).replace('T', ' ')
 
@@ -177,7 +255,7 @@ function Searches() {
   const stop = () => a.run(async () => { const r = await api('/search/cancel', { method: 'POST' }); setTimeout(load, 800); return `Stopping ${r.run_id} — it can be resumed later.` })
 
   return (
-    <Section n="03" title="Searches" note="Each run browses your sources, skips anything already in the database, and saves new jobs and internships with their full description.">
+    <Section n="04" title="Searches" note="Each run browses your sources, skips anything already in the database, and saves new jobs and internships with their full description.">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-ink pb-4">
         {d?.running
           ? <button className={btn2Cls} disabled={a.busy} onClick={stop}>Stop search</button>
@@ -231,7 +309,7 @@ function Searches() {
   )
 }
 
-/* 04 — Log --------------------------------------------------------------- */
+/* 05 — Log --------------------------------------------------------------- */
 function Log() {
   const [logs, setLogs] = useState<any[]>([])
   const [level, setLevel] = useState('')
@@ -241,7 +319,7 @@ function Log() {
   }, [level])
 
   return (
-    <Section n="04" title="Log" note="Most recent first. Errors never stop the worker; failed jobs can be retried from the Pipeline.">
+    <Section n="05" title="Log" note="Most recent first. Errors never stop the worker; failed jobs can be retried from the Pipeline.">
       <div role="tablist" aria-label="Log level" className="flex gap-5 border-b border-ink pb-2">
         {[['', 'All'], ['error', 'Errors'], ['warn', 'Warnings'], ['info', 'Info']].map(([v, t]) => (
           <button key={t} role="tab" aria-selected={level === v} onClick={() => setLevel(v)}
@@ -263,5 +341,5 @@ function Log() {
 }
 
 export default function Tracker() {
-  return <div><Controls /><Register /><Searches /><Log /></div>
+  return <div><Agenda /><Controls /><Register /><Searches /><Log /></div>
 }

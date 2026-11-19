@@ -3,6 +3,7 @@ import Setup from './pages/Setup'
 import Pipeline from './pages/Pipeline'
 import Tracker from './pages/Tracker'
 import { api } from './api'
+import { readCapture } from './addjob'
 
 const TABS = [
   { key: 'pipeline', n: '01', label: 'Pipeline', sub: 'Review queue', C: Pipeline },
@@ -14,12 +15,16 @@ type Key = (typeof TABS)[number]['key']
 const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 
 export default function App() {
+  const [capture, setCapture] = useState(readCapture)   // a job sent by the bookmarklet (#add=...)
   const initial = (location.hash.slice(1) as Key) || 'pipeline'
   const [tab, setTab] = useState<Key>(TABS.some(t => t.key === initial) ? initial : 'pipeline')
   const [st, setSt] = useState<any>(null)
   useEffect(() => { if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab); window.scrollTo({ top: 0 }) }, [tab])
   useEffect(() => {
-    const h = () => { const k = location.hash.slice(1) as Key; if (TABS.some(t => t.key === k)) setTab(k) }
+    const h = () => {
+      if (location.hash.startsWith('#add=')) { const c = readCapture(); if (c) { setCapture(c); setTab('pipeline') } return }
+      const k = location.hash.slice(1) as Key; if (TABS.some(t => t.key === k)) setTab(k)
+    }
     window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h)
   }, [])
   useEffect(() => {
@@ -68,7 +73,7 @@ export default function App() {
           })}
         </nav>
 
-        <main className="pt-10 pb-24"><Page /></main>
+        <main className="pt-10 pb-24">{tab === 'pipeline' ? <Pipeline capture={capture} /> : <Page />}</main>
 
         <footer className="flex flex-wrap justify-between gap-2 border-t border-hair py-6 text-[12px] text-mute">
           <span>Seeko — local job-application assistant</span>

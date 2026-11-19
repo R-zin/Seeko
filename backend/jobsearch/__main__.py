@@ -8,7 +8,11 @@
     .venv/bin/python -m jobsearch jobs --type internship --q "django -senior"   # stored jobs, full-text search
     .venv/bin/python -m jobsearch export --format csv -o jobs.csv              # everything, with descriptions
     .venv/bin/python -m jobsearch show <job_id>            # one job with its full description
-    .venv/bin/python -m jobsearch db                       # which database is in use, row counts
+    .venv/bin/python -m jobsearch db                       # which database is in use, row counts, backup
+    .venv/bin/python -m jobsearch backup                   # full copy to BACKUP_DATABASE_URL now
+    .venv/bin/python -m jobsearch restore-backup [--force] # copy the backup server back into the primary
+    .venv/bin/python -m jobsearch doctor                   # what is still missing before the automation can run
+    .venv/bin/python -m jobsearch add <url> [--applied]    # add one job by its link (or --title/--company/--text)
 """
 from __future__ import annotations
 import argparse
@@ -101,6 +105,16 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("import-sqlite", help="copy jobs from an old SQLite database (only into an empty one)")
     s.add_argument("path", nargs="?")
     sub.add_parser("db", help="database in use and row counts")
+    sub.add_parser("doctor", help="readiness check: what is missing before the automation can run")
+    s = sub.add_parser("add", help="add one job by its link (or describe it with --title/--company/--text)")
+    s.add_argument("url", nargs="?", default="")
+    s.add_argument("--title", default=""); s.add_argument("--company", default=""); s.add_argument("--location", default="")
+    s.add_argument("--text", default="", help="job description, or @file to read it from a file")
+    s.add_argument("--applied", action="store_true", help="you already applied: track it, never apply again")
+    s.add_argument("--show-browser", action="store_true")
+    sub.add_parser("backup", help="copy every table to BACKUP_DATABASE_URL now (full check)")
+    s = sub.add_parser("restore-backup", help="copy the backup server into the primary (only an empty one, unless --force)")
+    s.add_argument("--force", action="store_true", help="overwrite a primary that has data: it becomes an exact copy of the backup")
     a = ap.parse_args(argv)
 
     import db
@@ -180,6 +194,45 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{m.__tablename__:14} {ses.scalar(select(func.count()).select_from(m))}")
             for t, n in ses.execute(select(Job.job_type, func.count()).group_by(Job.job_type)):
                 print(f"  {t:12} {n}")
+        from backup import service as backup
+        print(f"backup:   {backup.status()['target'] if backup.configured() else 'off (set BACKUP_DATABASE_URL)'}")
+        return 0
+    if a.cmd == "doctor":
+        import doctor
+        rep = asyncio.run(doctor.report())
+        mark = {"ok": "✓", "info": "·", "warn": "!", "error": "✗"}
+        for c in rep["checks"]:
+            print(f"{mark[c['level']]} {c['title']:24} {c['detail']}")
+            if c["fix"] and c["level"] in ("warn", "error"): print(f"  {'':24} → {c['fix']}")
+        print("ready" if rep["ready"] else f"{rep['errors']} problem(s) to fix before the automation can run")
+        return 0 if rep["ready"] else 1
+    if a.cmd == "add":
+        from jobsearch import intake
+        text = Path(a.text[1:]).read_text() if a.text.startswith("@") else a.text
+        try:
+            res = asyncio.run(intake.add_job(url=a.url, title=a.title, company=a.company, location=a.location,
+                                             description=text, mode="applied" if a.applied else "apply",
+                                             headless=not a.show_browser))
+        except intake.IntakeError as e:
+            print(f"not added: {e}", file=sys.stderr); return 1
+        with SessionLocal() as ses:
+            j = ses.get(Job, res["job_id"])
+        print(f"{'added' if res['created'] else 'already known'}: {j.id}  {j.title} — {j.company}  ({j.source})")
+        print("Seeko will score, tailor and fill it (and wait for your approval)." if j.application_status == "not_applied"
+              else f"tracked as {j.application_status}.")
+        return 0
+    if a.cmd in ("backup", "restore-backup"):
+        from backup import counts, redact, service as backup
+        if not backup.configured():
+            print("BACKUP_DATABASE_URL is not set (a postgresql:// URL, or 'embedded')", file=sys.stderr); return 2
+        try:
+            stats = backup.sync(full=True) if a.cmd == "backup" else backup.restore(force=a.force)
+        except Exception as e:
+            print(f"{a.cmd} failed: {e}", file=sys.stderr); return 1
+        print(_table([[t, v["copied"], v.get("deleted", 0)] for t, v in stats.items()], ["table", "copied", "deleted"]))
+        where = backup.target() if a.cmd == "backup" else db.get_engine()
+        print(f"{'backup' if a.cmd == 'backup' else 'primary'} now holds: "
+              + ", ".join(f"{t} {n}" for t, n in counts(where).items()) + f"  ({redact(str(where.url))})")
         return 0
     return 2
 
