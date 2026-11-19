@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, type Job, type SearchRun } from '../api'
+import { APPLICATION_STATUSES, api, type Job, type SearchRun } from '../api'
 import { Badge, Field, Kicker, Msg, Section, btn2Cls, btnCls, inputCls, linkBtnCls, pad, useAction } from '../ui'
+import { ApplicationSelect, NotionMark } from '../tracking'
 
 const STATUSES = ['scraped', 'scored', 'tailoring', 'tailored', 'applying', 'needs_review', 'applied', 'failed', 'skipped']
 const SOURCES = ['greenhouse', 'lever', 'ashby', 'workday', 'careers', 'linkedin', 'indeed', 'glassdoor', 'internshala']
@@ -75,7 +76,8 @@ function Th({ k, sort, onSort, children, className = '' }: { k?: SortKey; sort: 
 /* 02 — Register ---------------------------------------------------------- */
 function Register() {
   const [jobs, setJobs] = useState<Job[] | null>(null)
-  const [f, setF] = useState({ status: '', source: '', job_type: '', state: '', q: '' })
+  const [f, setF] = useState({ status: '', source: '', job_type: '', state: '', application_status: '', q: '' })
+  const [err, setErr] = useState('')
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString()
   const [sort, setSort] = useState<Sort>({ k: 'discovered_at', desc: true })
   const th = { sort, onSort: setSort }
@@ -95,10 +97,17 @@ function Register() {
     })
   }, [jobs, sort])
 
+  const setApplication = async (j: Job, v: string) => {
+    setErr('')
+    try {
+      const u = await api<Job>(`/jobs/${j.id}`, { method: 'PATCH', json: { application_status: v } })
+      setJobs(js => js?.map(x => x.id === u.id ? u : x) ?? js)
+    } catch (e: any) { setErr(e.message) }
+  }
 
   return (
     <Section n="02" title="Register" note="Every job Seeko has seen, mirrored to Notion when it is connected.">
-      <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-[minmax(12rem,1fr)_8rem_8rem_9rem_9rem]">
+      <div className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2 xl:grid-cols-[minmax(10rem,1fr)_6.5rem_7rem_8rem_8rem_8.5rem]">
         <Field label="Search" hint='Also searches saved descriptions. "exact phrase", -exclude, OR.'><input className={inputCls} placeholder="Title, company or description" value={f.q} onChange={e => setF({ ...f, q: e.target.value })} /></Field>
         <Field label="Posting">
           <select className={selectCls} value={f.state} onChange={e => setF({ ...f, state: e.target.value })}>
@@ -120,6 +129,11 @@ function Register() {
             <option value="">All</option>{SOURCES.map(x => <option key={x} value={x}>{x}</option>)}
           </select>
         </Field>
+        <Field label="Application">
+          <select className={selectCls.replace(' capitalize', '')} value={f.application_status} onChange={e => setF({ ...f, application_status: e.target.value })}>
+            <option value="">All</option>{APPLICATION_STATUSES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+        </Field>
       </div>
 
       <div className="mt-6 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[13px]">
@@ -128,13 +142,14 @@ function Register() {
         <a className={linkBtnCls} href={`/api/jobs/export?format=json${qs ? '&' + qs : ''}`}>Export JSON ↓</a>
         <span className="text-[12px] text-mute">Includes the full job descriptions.</span>
       </div>
+      {err && <Msg m={{ ok: false, text: err }} />}
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[880px] border-collapse text-left">
+        <table className="w-full min-w-[900px] border-collapse text-left">
           <thead className="border-y-2 border-rule text-[11px] text-mute">
             <tr>
               <th scope="col" className="w-12 py-3 pr-4 font-semibold uppercase tracking-[0.12em]">No.</th>
               <Th {...th} k="title">Role</Th><Th {...th} k="company">Company</Th><Th {...th}>Type</Th><Th {...th}>Source</Th>
-              <Th {...th} k="score" className="text-right">Score</Th><Th {...th}>Status</Th><Th {...th}>Notion</Th>
+              <Th {...th} k="score" className="text-right">Score</Th><Th {...th}>Status</Th><Th {...th}>Application</Th><Th {...th}>Notion</Th>
               <Th {...th} className="text-right">Seen</Th><Th {...th} k="discovered_at">Found</Th>
             </tr>
           </thead>
@@ -149,7 +164,11 @@ function Register() {
                 <td className="py-3.5 pr-4 text-mute">{j.source}</td>
                 <td className="py-3.5 pr-4 text-right text-[18px] font-bold tracking-[-0.02em] tabular-nums">{j.score ?? <span className="text-mute">—</span>}</td>
                 <td className="py-3.5 pr-4"><Badge s={j.status} /></td>
-                <td className="py-3.5 pr-4 font-mono text-[12px]">{j.notion_page_id ? 'synced' : <span className="text-mute">—</span>}</td>
+                <td className="py-1 pr-4 text-[13px]">
+                  <ApplicationSelect className="w-[8.25rem] border-transparent py-1 text-[13px] hover:border-hair" label={`Application status for ${j.title}`} value={j.application_status} onChange={v => setApplication(j, v)} />
+                  {j.next_step_date && <span className="block font-mono text-[11px] text-mute" title={j.next_step || 'Next step'}>next {j.next_step_date}</span>}
+                </td>
+                <td className="py-3.5 pr-4"><NotionMark j={j} /></td>
                 <td className="py-3.5 pr-4 text-right font-mono text-[12px] tabular-nums" title={j.last_seen_at ? `Last seen ${j.last_seen_at.slice(0, 10)}` : undefined}>{j.times_seen}×</td>
                 <td className="py-3.5 font-mono text-[12px] text-mute tabular-nums">{(j.applied_at ?? j.discovered_at).slice(0, 10)}</td>
               </tr>

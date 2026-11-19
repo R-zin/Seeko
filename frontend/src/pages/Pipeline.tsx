@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import ReactDiffViewer from 'react-diff-viewer-continued'
 import { api, type Job, type JobDetail, type TailorReport } from '../api'
 import { Badge, Figure, Kicker, Msg, btn2Cls, btnAccentCls, btnCls, linkBtnCls, pad, useAction, useDark } from '../ui'
+import { TrackingPanel } from '../tracking'
 
 const FILTERS = [
   { key: 'all', label: 'All', match: (_: Job) => true },
@@ -106,6 +107,8 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
       </div>
       <Msg m={a.msg} />
       {d.error && <p className="mt-4 border-l-2 border-warn pl-3 text-[13px] leading-relaxed text-warn">{d.error}</p>}
+
+      <TrackingPanel job={d} onSaved={j => { setD({ ...d, ...j }); onChange() }} />
 
       {/* Notes */}
       <div className="mt-10 grid grid-cols-12 gap-x-6 gap-y-8">

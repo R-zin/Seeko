@@ -19,9 +19,13 @@ async def lifespan(app: FastAPI):
     if n := Store().mark_interrupted():
         from db import log
         log(f"{n} job search run(s) were interrupted by a restart; resume them from the Tracker or `python -m jobsearch resume`", "warn")
-    task = asyncio.create_task(pipeline.loop())
+    from workers.notion_service import service as notion
+    from backup import service as backup
+    tasks = [asyncio.create_task(pipeline.loop()), asyncio.create_task(notion.run()), asyncio.create_task(backup.run())]
     yield
-    task.cancel(); await pipeline.shutdown()
+    for t in tasks: t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    await pipeline.shutdown()
 
 
 app = FastAPI(title="Seeko", lifespan=lifespan)
@@ -33,7 +37,7 @@ def health(): return {"ok": True}
 
 # routers added as modules land (see register() calls below)
 def _register():
-    for name in ("settings", "resume", "jobs", "pipeline", "search", "notion", "logs"):
+    for name in ("settings", "resume", "jobs", "pipeline", "search", "notion", "backup", "logs"):
         try:
             mod = __import__(f"api.{name}", fromlist=["router"])
             app.include_router(mod.router)

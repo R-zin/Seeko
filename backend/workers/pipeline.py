@@ -11,16 +11,17 @@ from tailor.tailor import tailor_resume
 from applier.engine import fill_application, submit
 from applier.gate import decide, pending
 from scraper.browser import open_context
-from . import notion_service as notion
 
 state = {"paused": False, "running": False, "task": None, "last_discovery": 0.0}
 
 
 def _set(job_id: str, **kw) -> None:
+    """Update a job. Notion picks the change up by itself (db.py marks it dirty and wakes the syncer on commit)."""
     with SessionLocal() as s:
         j = s.get(Job, job_id)
         for k, v in kw.items(): setattr(j, k, v)
-        if "status" in kw: j.notion_dirty = True
+        if kw.get("status") == "applied" and j.application_status == "not_applied":
+            j.application_status = "applied"
         s.commit()
 
 
@@ -33,7 +34,6 @@ async def discover(trigger: str = "manual") -> int:
         log("discovery skipped: a job search is already running", "warn"); return 0
     except RunCancelled:
         return 0
-    for jid in res["new_job_ids"]: asyncio.create_task(notion.sync_job(jid))
     return len(res["new_job_ids"])
 
 
@@ -51,12 +51,11 @@ async def process_job(job_id: str) -> None:
             _set(job_id, status="tailoring")
             t = await tailor_resume(job_id, jd["jd_text"], jd["title"], jd["company"])
             _set(job_id, status="tailored", tailored_summary=t.summary, tailored_ok=not t.fell_back)
-            await notion.sync_job(job_id); jd["status"] = "tailored"
+            jd["status"] = "tailored"
         if jd["status"] == "tailored":
             await apply_job(job_id, jd)
     except Exception as e:
         _set(job_id, status="failed", error=str(e)[:1000]); log(f"{jd['title']}: {e}", "error", job_id)
-    await notion.sync_job(job_id)
 
 
 async def apply_job(job_id: str, jd: dict) -> None:
@@ -89,13 +88,13 @@ async def approve(job_id: str) -> bool:
         await submit(page); _set(job_id, status="applied", applied_at=utcnow(), error="")
     except Exception as e: _set(job_id, status="failed", error=str(e)[:500])
     finally: await ctx.close(); await pw.stop()
-    await notion.sync_job(job_id); return True
+    return True
 
 
 async def skip(job_id: str) -> None:
     if entry := pending.pop(job_id, None):
         await entry[1].close(); await entry[0].stop()
-    _set(job_id, status="skipped"); await notion.sync_job(job_id)
+    _set(job_id, status="skipped")
 
 
 def recover_orphans() -> int:
@@ -104,7 +103,7 @@ def recover_orphans() -> int:
     with SessionLocal() as s:
         for j in s.query(Job).filter(Job.status.in_(["applying", "needs_review"])):
             if j.id not in pending:
-                j.status, j.notion_dirty, n = "tailored", True, n + 1
+                j.status, n = "tailored", n + 1
                 j.error = "re-queued after restart (previous browser session was lost)"
         s.commit()
     if n: log(f"recovered {n} job(s) orphaned by restart", "warn")
@@ -119,7 +118,7 @@ def retry(job_id: str) -> str | None:
         if (ARTIFACTS_DIR / job_id / "tailored_resume.pdf").exists(): j.status = "tailored"
         elif j.score is not None: j.status = "scored"
         else: j.status = "scraped"
-        j.error, j.notion_dirty = "", True; s.commit(); return j.status
+        j.error = ""; s.commit(); return j.status
 
 
 async def shutdown() -> None:
@@ -128,6 +127,12 @@ async def shutdown() -> None:
         _, ctx, _ = pending.pop(jid)
         try: await ctx.close()
         except Exception: pass
+
+
+# What the worker picks up: not closed (gone from its board / expired), and not already handled by the user - a job
+# marked applied / interviewing / rejected... in the Tracker or in Notion is never tailored or applied to again.
+WORKABLE = (Job.status.in_(["scraped", "scored", "tailoring", "tailored"]), Job.closed_at.is_(None),
+            Job.application_status == "not_applied")
 
 
 def llm_configured() -> bool:
@@ -152,11 +157,9 @@ async def loop() -> None:
                 jid = None
                 if llm_configured():
                     with SessionLocal() as s:
-                        j = (s.query(Job).filter(Job.status.in_(["scraped", "scored", "tailoring", "tailored"]), Job.closed_at.is_(None))
-                             .order_by(Job.discovered_at).first())   # closed postings are not tailored or applied to
+                        j = s.query(Job).filter(*WORKABLE).order_by(Job.discovered_at).first()
                         jid = j.id if j else None
                 if jid: await process_job(jid); continue
-                await notion.retry_dirty()
         except asyncio.CancelledError: raise
         except Exception as e:
             log(f"worker loop error: {e}", "error")

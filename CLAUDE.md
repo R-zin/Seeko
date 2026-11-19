@@ -1,6 +1,7 @@
 # Seeko
 
-Automates job discovery (LangGraph, PostgreSQL) -> LaTeX resume tailoring -> application form filling -> Notion tracking.
+Automates job discovery (LangGraph, PostgreSQL) -> LaTeX resume tailoring -> application form filling -> Notion tracking (live,
+two-way for the user's application tracking) -> optional backup PostgreSQL server.
 All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/responses`).
 
 ## Commands
@@ -18,7 +19,14 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 - `db.py` models + lazy engine. Empty `DATABASE_URL` = embedded PostgreSQL (`pgserver`, data in `data/postgres`); `postgresql://` URLs use
   psycopg 3; SQLite still works (tests). Schema = Alembic (`migrations/`), applied by `init_db()`; DBs from the old `create_all()` are
   stamped at `0001` first. On PostgreSQL an old `data/seeko.db` is imported once (only into an empty DB). New columns/tables need a migration
-  (`tests/test_jobsearch_store.py::test_migrations_match_models` fails otherwise).
+  (`tests/test_jobsearch_store.py::test_migrations_match_models` fails otherwise). `jobs.updated_at` / `search_runs.updated_at` have
+  `onupdate` (ORM and Core updates); a `before_flush` event sets `notion_dirty` when a column in `db.NOTION_FIELDS` changes and
+  `after_commit` calls `db.jobs_changed()` listeners. Core writers that change shown columns set `notion_dirty` and call
+  `jobs_changed()` themselves (see `store.persist_run`). Tracking columns (0004): `application_status` (keys in
+  `db.APPLICATION_STATUSES`, or a custom label from Notion), `next_step`, `next_step_date`, `notes`; edit via `db.update_application`.
+- `backup.py` mirror to `BACKUP_DATABASE_URL` (env-only; `embedded` = second pgserver): `Mirror.full()` diffs (pk, version) and deletes
+  extras, `incremental(since)` copies by version column (`TABLES`), `fix_sequences` keeps the backup promotable. `BackupService` loop
+  started in `main.py` lifespan; API `api/backup.py`; CLI `backup` / `restore-backup`. A new table needs an entry in `backup.TABLES`.
 - `jobsearch/` the job search as a LangGraph app: `graph.py` (plan → collect → dedupe → fetch → screen → [review] → persist → finish; collect/fetch
   fan out per source with `Send`; all I/O behind `Deps` so tests inject fakes), `browse.py` (Playwright `Session`: pacing, robots.txt, block
   detection, pagination/"Load more", iframe links), `extract.py` (JSON-LD JobPosting → board selector → page text; `detect_block`),
@@ -46,9 +54,17 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
   Writes `artifacts/{id}/tailor_report.json` (accepted / rejected / reverted with reasons).
 - `applier/` `extract.py` tags controls with `data-seeko-id`; `mapper.py` LLM maps fields (null = unknown); `engine.py` fills,
   never submits except `submit()`; `gate.py` decides review/submit/paused; open pages for review live in `gate.pending`.
-- `mcp_notion/` stdio client to `npx -y @notionhq/notion-mcp-server`; tool names are discovered at runtime (`find_tool`).
+- `mcp_notion/` stdio client to `npx -y @notionhq/notion-mcp-server@2` (API 2025-09-03: database -> data source; the server sends
+  HTTP errors as normal results, `client.call` turns them into `NotionError`). Tool names discovered at runtime (`find_tool`).
+  `schema.py` = `PROPS` (the one list of Notion properties: type, job field, two-way), `check()` maps a database (unknown /
+  wrong-type properties are never written), `setup_patch()` adds missing ones only, `description_blocks()` = JD page body.
+  `sync.py` `NotionDB` adapter (data source or legacy database tools).
 - `workers/pipeline.py` single background loop; `discover()` runs the job search graph; job status: scraped -> scored -> tailoring -> tailored -> applying -> needs_review -> applied/failed/skipped.
-  Notion sync (`notion_service.py`) is best-effort: failures leave `notion_dirty=True` and are retried.
+  Picks only `WORKABLE` jobs (open, and `application_status == "not_applied"`: the user's own status stops the bot).
+- `workers/notion_service.py` `NotionSync` (own task, woken by `jobs_changed`, polls too): push = dirty jobs, hash-skip, Seeko ID lookup
+  before create, `_mark` clears dirty only if `updated_at` is unchanged; pull = query pages edited since last pull, 3-way `merge()`
+  per two-way field against `notion_base` (Seeko wins conflicts). Transient errors back off globally, others per job
+  (`notion_attempts`/`notion_retry_at`). Never block the pipeline on Notion.
 
 ## Conventions / invariants
 - Approval gate is the default; full-auto is opt-in, capped daily, and must pause on CAPTCHA/2FA/unknown required fields.
@@ -63,3 +79,5 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 - Tests never touch the user's DB: `tests/conftest.py` forces a temp SQLite `DATABASE_URL`; PostgreSQL tests use `TEST_DATABASE_URL` or the
   embedded server, each in its own schema (`migrated` fixture runs a test on both backends).
 - Runtime data (`data/`, `artifacts/`, `browser_data/`, `.env`) is gitignored.
+- Notion bookkeeping columns (`notion_*`, `updated_at`) must never be in `NOTION_FIELDS` or the page payload (sync would loop).
+- `tests/fake_notion_server.py` mimics the real v2 tool names and error format; keep it in step when using a new tool.

@@ -8,7 +8,9 @@
     .venv/bin/python -m jobsearch jobs --type internship --q "django -senior"   # stored jobs, full-text search
     .venv/bin/python -m jobsearch export --format csv -o jobs.csv              # everything, with descriptions
     .venv/bin/python -m jobsearch show <job_id>            # one job with its full description
-    .venv/bin/python -m jobsearch db                       # which database is in use, row counts
+    .venv/bin/python -m jobsearch db                       # which database is in use, row counts, backup
+    .venv/bin/python -m jobsearch backup                   # full copy to BACKUP_DATABASE_URL now
+    .venv/bin/python -m jobsearch restore-backup [--force] # copy the backup server back into the primary
 """
 from __future__ import annotations
 import argparse
@@ -101,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("import-sqlite", help="copy jobs from an old SQLite database (only into an empty one)")
     s.add_argument("path", nargs="?")
     sub.add_parser("db", help="database in use and row counts")
+    sub.add_parser("backup", help="copy every table to BACKUP_DATABASE_URL now (full check)")
+    s = sub.add_parser("restore-backup", help="copy the backup server into the primary (only an empty one, unless --force)")
+    s.add_argument("--force", action="store_true", help="overwrite a primary that has data: it becomes an exact copy of the backup")
     a = ap.parse_args(argv)
 
     import db
@@ -180,6 +185,21 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{m.__tablename__:14} {ses.scalar(select(func.count()).select_from(m))}")
             for t, n in ses.execute(select(Job.job_type, func.count()).group_by(Job.job_type)):
                 print(f"  {t:12} {n}")
+        from backup import service as backup
+        print(f"backup:   {backup.status()['target'] if backup.configured() else 'off (set BACKUP_DATABASE_URL)'}")
+        return 0
+    if a.cmd in ("backup", "restore-backup"):
+        from backup import counts, redact, service as backup
+        if not backup.configured():
+            print("BACKUP_DATABASE_URL is not set (a postgresql:// URL, or 'embedded')", file=sys.stderr); return 2
+        try:
+            stats = backup.sync(full=True) if a.cmd == "backup" else backup.restore(force=a.force)
+        except Exception as e:
+            print(f"{a.cmd} failed: {e}", file=sys.stderr); return 1
+        print(_table([[t, v["copied"], v.get("deleted", 0)] for t, v in stats.items()], ["table", "copied", "deleted"]))
+        where = backup.target() if a.cmd == "backup" else db.get_engine()
+        print(f"{'backup' if a.cmd == 'backup' else 'primary'} now holds: "
+              + ", ".join(f"{t} {n}" for t, n in counts(where).items()) + f"  ({redact(str(where.url))})")
         return 0
     return 2
 

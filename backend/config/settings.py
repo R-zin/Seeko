@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     notion_token: str = ""
     notion_database_id: str = ""
+    notion_pull_interval_s: int = 60    # read tracking edits back from Notion this often; 0 = one-way (push only)
 
     approval_mode: bool = True          # approval gate by default
     daily_apply_cap: int = 10
@@ -33,6 +34,10 @@ class Settings(BaseSettings):
     # Any SQLAlchemy URL (postgresql://… recommended). Empty = embedded PostgreSQL in data/postgres.
     # Deployment config: read from env/.env only, never from the UI overrides file.
     database_url: str = ""
+    # Backup PostgreSQL server that mirrors every Seeko table (backup.py). Empty = off; "embedded" = a second local
+    # server in data/postgres-backup. Env-only, like database_url (the URL holds a password).
+    backup_database_url: str = ""
+    backup_interval_s: int = 30         # incremental copy this often; a full check runs at start and every 6 h
 
     # Job search (LangGraph). Defaults are deliberately polite: few pages, jittered delays, bounded detail visits.
     search_max_queries: int = 6         # per board, per run (titles x locations x job types)
@@ -59,7 +64,7 @@ class Settings(BaseSettings):
 
 
 OVERRIDES = DATA_DIR / "settings.json"   # UI edits persist here (git-ignored; holds secrets, chmod 600)
-ENV_ONLY = {"database_url"}               # older settings.json files pinned the SQLite path; ignore it
+ENV_ONLY = {"database_url", "backup_database_url"}   # deployment config (and old files pinned the SQLite path)
 
 
 def _load() -> Settings:

@@ -84,3 +84,33 @@ def test_search_start_and_resume_endpoints():
         settle(c)
         logs = [x["message"] for x in c.get("/api/logs?level=warn").json()]
         assert any("api-interrupted" in m and "no checkpoint" in m for m in logs)
+
+
+def test_tracking_patch_notion_and_backup_endpoints():
+    from db import Job, SessionLocal
+    with TestClient(app) as c:
+        with SessionLocal() as s:
+            s.merge(Job(id="trk1", source="lever", company="Acme", title="Engineer", url="https://x/trk1",
+                        canonical_url="https://x/trk1", dedupe_key="acme|engineer-trk1")); s.commit()
+        j = c.get("/api/jobs/trk1").json()
+        assert j["application_status"] == "not_applied" and j["notion_state"] == "off" and j["next_step_date"] is None
+        r = c.patch("/api/jobs/trk1", json={"application_status": "Interviewing", "next_step": "Onsite",
+                                            "next_step_date": "2026-12-03", "notes": "bring portfolio"})
+        assert r.status_code == 200
+        j = r.json()
+        assert (j["application_status"], j["next_step"], j["next_step_date"], j["notes"]) == ("interviewing", "Onsite", "2026-12-03", "bring portfolio")
+        assert j["applied_at"] is None
+        j = c.patch("/api/jobs/trk1", json={"application_status": "applied"}).json()
+        assert j["application_status"] == "applied" and j["applied_at"]          # marking applied dates it
+        j = c.patch("/api/jobs/trk1", json={"applied_at": "2026-11-02"}).json()
+        assert j["applied_at"].startswith("2026-11-02") and j["notes"] == "bring portfolio"   # untouched fields stay
+        assert c.patch("/api/jobs/trk1", json={"application_status": ""}).status_code == 422
+        assert c.patch("/api/jobs/nope", json={"notes": "x"}).status_code == 404
+        assert [x["id"] for x in c.get("/api/jobs?application_status=applied").json()] == ["trk1"]
+        assert c.get("/api/jobs?application_status=offer").json() == []
+        assert [x["key"] for x in c.get("/api/jobs/application-statuses").json()][:2] == ["not_applied", "applied"]
+        st = c.get("/api/notion/status").json()
+        assert st["configured"] is False and st["running"] is True and "Interviewing" in st["application_statuses"]
+        assert c.post("/api/notion/setup").status_code == 400
+        assert c.get("/api/backup").json()["configured"] is False and c.post("/api/backup/sync").status_code == 400
+        assert c.get("/api/settings").json()["notion_pull_interval_s"] == 60

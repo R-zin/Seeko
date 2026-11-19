@@ -20,13 +20,15 @@ class AppSettings(BaseModel):
     search_delay_max_s: float | None = Field(None, ge=0, le=300); search_revisit_days: int | None = Field(None, ge=0, le=365)
     search_respect_robots: bool | None = None; search_llm_review: bool | None = None; indeed_host: str | None = None
     search_daily_pages: int | None = Field(None, ge=1, le=5000); search_block_cooldown_h: float | None = Field(None, ge=0, le=720)
+    notion_pull_interval_s: int | None = Field(None, ge=0, le=86400); backup_interval_s: int | None = Field(None, ge=5, le=86400)
 
 
 @router.get("/settings")
 def get():
     s = get_settings()
     return {"approval_mode": s.approval_mode, "daily_apply_cap": s.daily_apply_cap, "discovery_interval_min": s.discovery_interval_min, "min_match_score": s.min_match_score,
-            "enabled_sources": s.enabled_sources, "notion_token": "***" if s.notion_token else "", "notion_database_id": s.notion_database_id} | {
+            "enabled_sources": s.enabled_sources, "notion_token": "***" if s.notion_token else "", "notion_database_id": s.notion_database_id,
+            "notion_pull_interval_s": s.notion_pull_interval_s, "backup_interval_s": s.backup_interval_s} | {
             k: getattr(s, k) for k in SEARCH_KEYS}
 
 

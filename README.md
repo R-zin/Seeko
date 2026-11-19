@@ -21,8 +21,8 @@ The first LaTeX compile with tectonic downloads its TeX bundle (a few minutes on
    own text (scanned PDFs without a text layer are rejected). Uploads are drafts: check the compile result and the
    "what can be tailored" panel, then **Save as base**. Fill in the profile and add company career URLs (Greenhouse, Lever, Ashby, Workday).
 3. Optional: *Log in to LinkedIn/Indeed/Glassdoor* opens a visible browser; sign in once, close it. Sessions persist in `browser_data/`.
-4. Optional: Notion — create an internal integration, share your tracker database with it, paste token + database ID, *Test Notion MCP*.
-   Required properties: Role (title), Company, Source, Job URL (url), Match Score (number), Status (select/status), Tailored Summary, Applied Date (date).
+4. Optional: Notion (see [Notion tracker](#notion-tracker)) — create an internal integration, create a database and connect the
+   integration to it, paste token + database ID under Setup → Notion, then **Set up database**.
 5. **Pipeline tab → Run discovery** (or Tracker → Searches → *Search now*). New jobs and internships are saved with their full
    description, then scored, tailored, compiled, and the form is filled. In the default **approval gate** mode the browser stays on the filled form
    and you click **Approve & Submit** (or Skip) in the dashboard.
@@ -68,6 +68,46 @@ CLI, from `backend/`:
 ```
 LangGraph Studio: `pip install "langgraph-cli[inmem]"` and `langgraph dev` in `backend/` (graph `job_search`, see `langgraph.json`).
 
+## Notion tracker
+Seeko keeps a Notion database in step with its own, through Notion's MCP server (`npx -y @notionhq/notion-mcp-server@2`,
+Notion API 2025-09-03).
+
+- **What each page holds.** Role, Company, Status (Scraped → Scored → Tailoring → Tailored → Applying → Needs Review → Applied /
+  Failed / Skipped), **Application Status** (Not applied, Applied, Assessment, Interviewing, Offer, Accepted, Rejected, Withdrawn,
+  No response), Job Type, Location, Remote, Source, Job URL, Match Score, Employment Type, the dates — Discovered, Posted,
+  Apply By, Applied Date, Closed, Next Step Date — Next Step, Notes, Tailored Summary and Seeko ID. The page body is the full job
+  description.
+- **Set up database** adds whichever of these properties your database lacks (it works on a brand-new empty database too) and
+  never changes or removes existing ones. Until then, missing properties are simply not written; a `status`-type Status works if
+  it has options with these names.
+- **Live.** Any change to a job — a new posting, a status step, a closed posting, your tracking edits — marks it for Notion and wakes
+  the syncer, so the page updates within seconds (Notion allows ~3 requests/s; a page that would not change is not sent).
+  Failures never block the pipeline: outages back off, a bad job is retried on its own, and Setup → Notion shows pages, waiting,
+  errors and the last error. A page deleted in Notion is not recreated unless you press *Resync all*.
+- **Two-way for your tracking.** Application Status, Applied Date, Next Step, Next Step Date and Notes can be edited in Seeko
+  (Tracker → Application column, or the job's *Your tracking* panel) or in Notion; Notion edits come back every
+  `NOTION_PULL_INTERVAL_S` (60 s). If both sides changed the same field before a sync, Seeko's value wins (logged). A custom
+  Application Status option you create in Notion is kept as-is.
+- **Your status steers the bot.** A job you mark Applied / Interviewing / Rejected / … (anything but *Not applied*) is never tailored
+  or applied to by Seeko. Marking a job applied without a date dates it today.
+
+## Backup database
+Set `BACKUP_DATABASE_URL` to a second PostgreSQL server and Seeko keeps a live copy of every table on it (jobs with descriptions
+and tracking, search runs, sightings, rejected pages, logs):
+```bash
+docker compose up -d db-backup     # BACKUP_DATABASE_URL=postgresql://seeko:seeko@localhost:5433/seeko
+```
+Any hosted PostgreSQL works (a server on another machine also survives losing this one), or `BACKUP_DATABASE_URL=embedded` for a
+second local server in `data/postgres-backup`. The backup gets the same schema (Alembic), then a full check at start and every 6 h
+(copies what differs, deletes what the primary no longer has) and an incremental copy every `BACKUP_INTERVAL_S` (30 s).
+Setup → Backup shows when it last copied and how many rows it holds.
+
+- **Switch over:** point `DATABASE_URL` at the backup and restart — its id sequences are kept past the copied rows, so it accepts
+  new writes straight away.
+- **Copy back:** `python -m jobsearch restore-backup` copies the backup into an empty primary (`--force` overwrites a primary that
+  has data, making it an exact copy). `python -m jobsearch backup` runs a full copy now; `db` shows the backup in use.
+- LangGraph checkpoints are not copied; losing them only means an interrupted search cannot be resumed.
+
 ## Safety
 - Approval gate is the default. Full-auto is opt-in, has a daily cap, and pauses on CAPTCHA / 2FA / unanswerable required fields.
 - Tailoring only rephrases your summary, skills order and experience/project bullets — never headings, companies, dates or education.
@@ -81,7 +121,8 @@ LangGraph Studio: `pip install "langgraph-cli[inmem]"` and `langgraph dev` in `b
 
 ## Tests
 `cd backend && .venv/bin/python -m pytest -q` — mock OpenAI server (tier fallback, 401/404), LaTeX compile + overflow recovery + fabrication guards,
-fake Notion MCP server over stdio, dedupe/ATS parsing, Playwright dry-run on Greenhouse/Lever-style fixtures, and the job search graph end to end
+fake Notion MCP server over stdio (schema setup, live push, no duplicate pages, deleted pages, per-job backoff, two-way merge),
+backup mirror (full / incremental / deletes / sequences / restore), dedupe/ATS parsing, Playwright dry-run on Greenhouse/Lever-style fixtures, and the job search graph end to end
 (real headless Chromium on a fixture careers site and a CAPTCHA'd board, checkpoint resume). Storage tests run on SQLite and on a real
 PostgreSQL: `TEST_DATABASE_URL` (CI uses a service container; tests only touch their own schemas) or else the embedded server.
 `NOTION_TOKEN` enables a live Notion smoke test.

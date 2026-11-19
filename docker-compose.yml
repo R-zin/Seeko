@@ -1,6 +1,8 @@
-# Optional: a standalone PostgreSQL instead of the embedded one.
-#   docker compose up -d db
-#   DATABASE_URL=postgresql://seeko:seeko@localhost:5432/seeko   (in .env)
+# Optional: standalone PostgreSQL servers instead of the embedded one.
+#   docker compose up -d db          -> DATABASE_URL=postgresql://seeko:seeko@localhost:5432/seeko
+#   docker compose up -d db-backup   -> BACKUP_DATABASE_URL=postgresql://seeko:seeko@localhost:5433/seeko
+# The backup gets a live copy of every Seeko table (backend/backup.py). For protection against losing this machine,
+# point BACKUP_DATABASE_URL at a server somewhere else instead.
 services:
   db:
     image: postgres:16
@@ -8,5 +10,12 @@ services:
     ports: ["127.0.0.1:5432:5432"]
     volumes: ["seeko-pg:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U seeko"], interval: 5s, retries: 10 }
+  db-backup:
+    image: postgres:16
+    environment: { POSTGRES_USER: seeko, POSTGRES_PASSWORD: seeko, POSTGRES_DB: seeko }
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: ["seeko-pg-backup:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U seeko"], interval: 5s, retries: 10 }
 volumes:
   seeko-pg:
+  seeko-pg-backup:

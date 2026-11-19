@@ -44,6 +44,7 @@ async def test_loop_survives_a_crashing_job(session, monkeypatch):
     mk(session, "boom", "scraped"); calls = []
     async def bad(jid): calls.append(jid); P.state["running"] = False; raise RuntimeError("kaboom")
     monkeypatch.setattr(P, "process_job", bad)
+    monkeypatch.setattr(P, "llm_configured", lambda: True)   # else nothing is picked and the loop spins forever
     async def nosleep(_): pass
     monkeypatch.setattr(P.asyncio, "sleep", nosleep)
     P.state["paused"] = False
@@ -78,3 +79,17 @@ def test_worker_idle_without_llm_config(monkeypatch):
     assert not P.llm_configured()
     monkeypatch.setattr(P, "get_settings", lambda: S(llm_base_url="http://localhost:11434/v1"))
     assert P.llm_configured()
+
+
+def test_worker_leaves_jobs_the_user_already_handled(session):
+    mk(session, "mine", "tailored", application_status="interviewing")   # applied by hand, tracked in Notion
+    mk(session, "todo", "scored")
+    with session() as s:
+        assert [j.id for j in s.query(Job).filter(*P.WORKABLE)] == ["todo"]
+
+
+def test_submitting_marks_the_application_applied(session):
+    mk(session, "a", "applying"); mk(session, "b", "applying", application_status="offer")
+    P._set("a", status="applied"); P._set("b", status="applied")
+    with session() as s:
+        assert s.get(Job, "a").application_status == "applied" and s.get(Job, "b").application_status == "offer"

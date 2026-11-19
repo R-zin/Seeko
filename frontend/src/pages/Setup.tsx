@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, type BackupStatus, type NotionStatus } from '../api'
 import { ResumeSection } from '../resume'
 import { Check, Field, Kicker, Msg, Section, areaCls, btn2Cls, btnCls, inputCls, linkBtnCls, useAction } from '../ui'
 
@@ -150,7 +150,7 @@ function ProfileSections() {
   </>
 }
 
-/* 05 — Sources & Notion -------------------------------------------------- */
+/* 05 — Sources ------------------------------------------------------------ */
 const BOARDS = [
   { key: 'watchlist', label: 'Career pages', note: 'ATS APIs and browsed careers pages. Safe.' },
   { key: 'linkedin', label: 'LinkedIn', note: 'Login required. ToS risk.' },
@@ -161,7 +161,7 @@ const BOARDS = [
 
 function SourcesSection() {
   const [s, setS] = useState<any>(null)
-  const a = useAction(); const n = useAction()
+  const a = useAction()
   useEffect(() => { api('/settings').then(setS) }, [])
   const toggle = (k: string, on: boolean) => setS({ ...s, enabled_sources: on ? [...s.enabled_sources, k] : s.enabled_sources.filter((y: string) => y !== k) })
 
@@ -219,26 +219,128 @@ function SourcesSection() {
       </>}
     </Section>
 
-    <Section n="06" title="Notion" note={<>Sync every job to your tracker through Notion’s MCP server. Share the database with your integration first.</>}
-      aside={<p className="mt-4 max-w-[34ch] font-mono text-[11px] leading-relaxed text-mute">Role · Company · Source · Job URL · Match Score · Status · Tailored Summary · Applied Date</p>}>
-      {!s ? <Skeleton /> : <>
-        <div className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
-          <Field label="Integration token"><input className={inputCls} type="password" autoComplete="off" value={s.notion_token} onChange={e => setS({ ...s, notion_token: e.target.value })} placeholder="ntn_…" /></Field>
-          <Field label="Database ID"><input className={inputCls + ' font-mono text-[13px]'} value={s.notion_database_id} onChange={e => setS({ ...s, notion_database_id: e.target.value })} placeholder="32-character id" /></Field>
-        </div>
-        <div className="mt-8 flex flex-wrap gap-3">
-          <button className={btnCls} disabled={n.busy} onClick={() => n.run(async () => {
-            await api('/settings', { method: 'PUT', json: s }); const r = await api('/notion/test', { method: 'POST' })
-            if (!r.ok) throw new Error(r.error ?? `Connected, but the database schema needs work.\nMissing: ${r.missing?.join(', ') || 'none'}\nWrong type: ${r.wrong_type?.map((w: any) => `${w.property} is ${w.found}, expected ${w.expected}`).join('; ') || 'none'}`)
-            return `Connected — ${r.tools.length} MCP tools, schema OK.`
-          })}>{n.busy ? 'Connecting…' : 'Save & test Notion'}</button>
-        </div>
-        <Msg m={n.msg} />
-      </>}
-    </Section>
   </>
 }
 
+/* 06 — Notion ------------------------------------------------------------- */
+const ago = (iso: string | null) => {
+  if (!iso) return 'never'
+  const s = Math.max(0, (Date.now() - Date.parse(iso + (iso.endsWith('Z') ? '' : 'Z'))) / 1000)
+  return s < 60 ? `${Math.round(s)} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`
+}
+
+const PROPS = ['Role', 'Company', 'Status', 'Application Status', 'Applied Date', 'Next Step', 'Next Step Date', 'Notes', 'Job Type',
+  'Location', 'Remote', 'Source', 'Job URL', 'Match Score', 'Employment Type', 'Discovered', 'Posted', 'Apply By', 'Closed',
+  'Tailored Summary', 'Seeko ID']
+
+function NotionSection() {
+  const [s, setS] = useState<any>(null)
+  const [st, setSt] = useState<NotionStatus | null>(null)
+  const n = useAction()
+  useEffect(() => { api('/settings').then(setS) }, [])
+  useEffect(() => {
+    const load = () => api<NotionStatus>('/notion/status').then(setSt).catch(() => {})
+    load(); const t = setInterval(load, 4000); return () => clearInterval(t)
+  }, [])
+  const saveSettings = () => api('/settings', { method: 'PUT', json: { notion_token: s.notion_token, notion_database_id: s.notion_database_id, notion_pull_interval_s: s.notion_pull_interval_s } })
+  const describe = (r: any) => [
+    r.missing?.length ? `Not in your database yet (skipped until added): ${r.missing.join(', ')}` : 'Every tracker property is present.',
+    r.wrong_type?.length ? `Different type, left alone: ${r.wrong_type.map((w: any) => `${w.property} is ${w.found}, expected ${w.expected.join(' or ')}`).join('; ')}` : '',
+  ].filter(Boolean).join('\n')
+  const schema = st?.schema
+
+  return (
+    <Section n="06" title="Notion" note={<>Every job, its status and your application tracking, kept in your Notion database through Notion’s MCP server. Changes reach Notion within seconds; edits to the tracking columns in Notion come back.</>}
+      aside={<p className="mt-4 max-w-[34ch] font-mono text-[11px] leading-relaxed text-mute">{PROPS.join(' · ')}<br /><span className="text-ink-2">Page body: the full job description.</span></p>}>
+      {!s ? <Skeleton /> : <>
+        <ol className="mb-6 list-decimal space-y-1 pl-5 text-[13.5px] leading-relaxed text-ink-2">
+          <li>Create an internal integration at notion.so/profile/integrations and copy its token.</li>
+          <li>Create a database (an empty one is fine), open <span className="font-mono text-[12px]">•••</span> → Connections and add the integration.</li>
+          <li>Paste the token and the database ID (from its link), then <b>Set up database</b> to add the tracker properties.</li>
+        </ol>
+        <div className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2 xl:grid-cols-3">
+          <Field label="Integration token"><input className={inputCls} type="password" autoComplete="off" value={s.notion_token} onChange={e => setS({ ...s, notion_token: e.target.value })} placeholder="ntn_…" /></Field>
+          <Field label="Database ID"><input className={inputCls + ' font-mono text-[13px]'} value={s.notion_database_id} onChange={e => setS({ ...s, notion_database_id: e.target.value })} placeholder="32-character id" /></Field>
+          <Field label="Read edits back every, seconds" hint="0 = one-way (Seeko → Notion only).">
+            <input type="number" min={0} className={inputCls + ' tabular-nums'} value={s.notion_pull_interval_s} onChange={e => setS({ ...s, notion_pull_interval_s: +e.target.value })} />
+          </Field>
+        </div>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <button className={btnCls} disabled={n.busy} onClick={() => n.run(async () => {
+            await saveSettings(); const r = await api('/notion/test', { method: 'POST' })
+            if (!r.ok) throw new Error(r.error ?? 'The database has no title property.')
+            return `Connected — ${r.tools.length} MCP tools, ${r.mapped.length} of ${PROPS.length} properties mapped.\n${describe(r)}`
+          })}>{n.busy ? 'Working…' : 'Save & test'}</button>
+          <button className={btn2Cls} disabled={n.busy || !s.notion_database_id} onClick={() => n.run(async () => {
+            await saveSettings(); const r = await api('/notion/setup', { method: 'POST' })
+            if (!r.ok) throw new Error(r.error ?? 'Setup failed.')
+            return `${r.added.length ? `Added ${r.added.length} properties: ${r.added.join(', ')}.` : 'Nothing to add.'} Every job is being re-synced.\n${describe(r)}`
+          })}>Set up database</button>
+          <button className={btn2Cls} disabled={n.busy || !st?.configured} onClick={() => n.run(async () => {
+            const r = await api('/notion/resync', { method: 'POST' }); return `${r.queued} jobs queued; pages deleted in Notion will be recreated.`
+          })}>Resync all</button>
+          <button className={btn2Cls} disabled={n.busy || !st?.configured} onClick={() => n.run(async () => {
+            const r = await api('/notion/pull', { method: 'POST' }); if (!r.ok) throw new Error(r.error); return `${r.changed} job(s) updated from Notion.`
+          })}>Pull edits now</button>
+        </div>
+        <Msg m={n.msg} />
+        {st?.configured && (
+          <dl className="mt-8 grid grid-cols-2 gap-x-8 gap-y-4 border-t border-hair pt-4 text-[13px] sm:grid-cols-4">
+            <div><dt><Kicker>Pages</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{st.synced}</dd></div>
+            <div><dt><Kicker>Waiting</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{st.pending}</dd></div>
+            <div><dt><Kicker>Errors</Kicker></dt><dd className={`mt-1 text-[22px] font-bold tabular-nums ${st.errors ? 'text-accent' : ''}`}>{st.errors}</dd></div>
+            <div><dt><Kicker>Last push / pull</Kicker></dt><dd className="mt-1 font-mono text-[12px] leading-relaxed">{ago(st.last_push_at)}<br />{ago(st.last_pull_at)}</dd></div>
+            {schema && !!schema.missing.length && <p className="col-span-full text-[12.5px] text-warn">Missing from the database (not synced until added): {schema.missing.join(', ')}. Use Set up database.</p>}
+            {st.last_error && <p className="col-span-full font-mono text-[12px] text-accent">{st.last_error}{st.backoff_until ? ` — retrying after ${st.backoff_until.slice(11, 19)} UTC` : ''}</p>}
+          </dl>
+        )}
+      </>}
+    </Section>
+  )
+}
+
+/* 07 — Backup ------------------------------------------------------------- */
+function BackupSection() {
+  const [b, setB] = useState<BackupStatus | null>(null)
+  const a = useAction()
+  const load = () => api<BackupStatus>('/backup').then(setB).catch(() => {})
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t) }, [])
+
+  return (
+    <Section n="07" title="Backup" note="A second PostgreSQL server that keeps a live copy of every job, run and log. It can take over if the main database is lost.">
+      {!b ? <Skeleton /> : !b.configured ? (
+        <div className="max-w-[70ch] space-y-3 text-[14px] leading-relaxed text-ink-2">
+          <p>Off. Set <span className="font-mono text-[12.5px]">BACKUP_DATABASE_URL</span> in <span className="font-mono text-[12.5px]">.env</span> and restart:</p>
+          <ul className="list-disc space-y-1 pl-5 font-mono text-[12.5px]">
+            <li>docker compose up -d db-backup → postgresql://seeko:seeko@localhost:5433/seeko</li>
+            <li>any hosted PostgreSQL (another machine is safest)</li>
+            <li>embedded — a second local server in data/postgres-backup</li>
+          </ul>
+        </div>
+      ) : <>
+        <dl className="grid grid-cols-2 gap-x-8 gap-y-4 text-[13px] sm:grid-cols-4">
+          <div className="col-span-2"><dt><Kicker>Server</Kicker></dt><dd className="mt-1 break-all font-mono text-[12px]">{b.target}</dd></div>
+          <div><dt><Kicker>Last copy</Kicker></dt><dd className="mt-1 font-mono text-[12px]">{ago(b.last_sync_at)}</dd></div>
+          <div><dt><Kicker>Last full check</Kicker></dt><dd className="mt-1 font-mono text-[12px]">{ago(b.last_full_at)}</dd></div>
+          {Object.entries(b.rows).map(([t, n]) => (
+            <div key={t}><dt><Kicker>{t.replace('_', ' ')}</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{n}</dd></div>
+          ))}
+        </dl>
+        {b.last_error && <p className="mt-4 font-mono text-[12px] text-accent">{b.last_error}</p>}
+        <div className="mt-8 flex flex-wrap items-center gap-4">
+          <button className={btnCls} disabled={a.busy} onClick={() => a.run(async () => {
+            const r = await api('/backup/sync', { method: 'POST' }); load()
+            const copied = Object.values(r.tables as Record<string, { copied: number }>).reduce((t, x) => t + x.copied, 0)
+            return `Backup checked — ${copied} row(s) copied.`
+          })}>{a.busy ? 'Copying…' : 'Back up now'}</button>
+          <span className="text-[12px] text-mute">Copies changes every {b.interval_s} s. To switch over, point DATABASE_URL at the backup; to copy it back, run <span className="font-mono">python -m jobsearch restore-backup</span>.</span>
+        </div>
+        <Msg m={a.msg} />
+      </>}
+    </Section>
+  )
+}
+
 export default function Setup() {
-  return <div><ModelSection /><ResumeSection /><ProfileSections /><SourcesSection /></div>
+  return <div><ModelSection /><ResumeSection /><ProfileSections /><SourcesSection /><NotionSection /><BackupSection /></div>
 }
