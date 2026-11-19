@@ -114,3 +114,16 @@ def test_tracking_patch_notion_and_backup_endpoints():
         assert c.post("/api/notion/setup").status_code == 400
         assert c.get("/api/backup").json()["configured"] is False and c.post("/api/backup/sync").status_code == 400
         assert c.get("/api/settings").json()["notion_pull_interval_s"] == 60
+
+
+def test_cross_site_writes_are_refused():
+    with TestClient(app) as c:
+        evil = {"Origin": "https://jobs-are-great.example"}
+        assert c.post("/api/pipeline/approve-ready", headers=evil).status_code == 403
+        assert c.put("/api/settings", json={"approval_mode": False}, headers=evil).status_code == 403
+        assert c.post("/api/pipeline/approve-ready", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+        assert c.post("/api/pipeline/approve-ready", headers={"Origin": "http://evil.test:8000"}).status_code == 403  # DNS rebinding
+        assert c.get("/api/jobs", headers=evil).status_code == 200                          # reading is not a write
+        for ok in ("http://127.0.0.1:5173", "http://localhost:8000"):
+            assert c.post("/api/pipeline/approve-ready", headers={"Origin": ok}).json() == {"ok": True, "approved": []}
+        assert c.post("/api/pipeline/approve-ready").status_code == 200                     # CLI / scripts: no Origin

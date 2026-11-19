@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     notion_database_id: str = ""
     notion_pull_interval_s: int = 60    # read tracking edits back from Notion this often; 0 = one-way (push only)
 
+    # Notifications (notify.py): Slack / Discord incoming webhook, ntfy topic URL, or any URL taking JSON.
+    notify_webhook_url: str = ""
+    notify_events: list[str] = Field(default_factory=lambda: ["needs_review", "applied", "failed", "new_jobs", "digest"])
+    digest_hour: int = 8                # local hour for the daily follow-up digest; -1 = no digest
+    followup_after_days: int = 7        # an application with no news after this many days is due a follow-up
+    auto_ghost_days: int = 0            # mark "No response" after this many days without news; 0 = never
+    auto_retry: int = 3                 # retries of a job that failed for a transient reason (timeout, rate limit...)
+    app_url: str = "http://127.0.0.1:5173"   # where you open Seeko (links in notifications); 8000 when serving the build
+
     approval_mode: bool = True          # approval gate by default
     daily_apply_cap: int = 10
     discovery_interval_min: int = 0     # 0 = manual only

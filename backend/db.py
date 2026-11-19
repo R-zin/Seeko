@@ -52,7 +52,8 @@ class Job(Base):
     jd_text: Mapped[str] = mapped_column(Text, default="")        # full job description, plain text
     is_easy_apply: Mapped[bool] = mapped_column(Boolean, default=False)
     discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    status: Mapped[str] = mapped_column(String, default="scraped")  # scraped scored tailoring tailored applying needs_review applied failed skipped
+    # scraped scored tailoring tailored applying needs_review applied failed skipped | tracked (added by you as applied)
+    status: Mapped[str] = mapped_column(String, default="scraped")
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     missing_keywords: Mapped[str] = mapped_column(Text, default="[]")
     tailored_summary: Mapped[str] = mapped_column(Text, default="")
@@ -87,6 +88,12 @@ class Job(Base):
     notion_error: Mapped[str] = mapped_column(Text, default="", server_default="")
     notion_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     notion_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 0005: where the job came from (search | user: added by link / bookmarklet - never auto-skipped for a low score),
+    # questions its form is waiting on (answer_bank keys), and automatic retries of transient failures.
+    origin: Mapped[str] = mapped_column(String, default="search", server_default="search")
+    waiting_on: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 # What the user tracks after (or instead of) Seeko applying. Free text is allowed too (a custom option made in Notion).
@@ -143,6 +150,43 @@ class SearchRun(Base):
     stats: Mapped[dict] = mapped_column(JSONType, default=dict)
     error: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=utcnow, onupdate=utcnow)   # 0004
+
+
+class SavedAnswer(Base):
+    """An application-form question and your answer to it (applier/answers.py). `answer` None = waiting for you."""
+    __tablename__ = "answer_bank"
+    key: Mapped[str] = mapped_column(String, primary_key=True)        # normalized question text
+    question: Mapped[str] = mapped_column(Text)                         # as last seen on a form
+    kind: Mapped[str] = mapped_column(String, default="text", server_default="text")
+    options: Mapped[list | None] = mapped_column(JSONType, nullable=True)   # choices on the last form that asked it
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String, default="", server_default="")   # you | learned (typed into a form)
+    times_seen: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=utcnow, onupdate=utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AppState(Base):
+    """Small persistent bookkeeping (e.g. the day the last digest went out)."""
+    __tablename__ = "app_state"
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[dict | list | str | None] = mapped_column(JSONType, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=utcnow, onupdate=utcnow)
+
+
+def get_state(key: str, default=None, session_factory=None):
+    with (session_factory or SessionLocal)() as s:
+        row = s.get(AppState, key)
+        return default if row is None else row.value
+
+
+def set_state(key: str, value, session_factory=None) -> None:
+    with (session_factory or SessionLocal)() as s:
+        row = s.get(AppState, key)
+        if row is None: s.add(AppState(key=key, value=value))
+        else: row.value = value
+        s.commit()
 
 
 class JobSighting(Base):

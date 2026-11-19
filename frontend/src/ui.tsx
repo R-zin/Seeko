@@ -86,6 +86,7 @@ const STATUS: Record<string, { label: string; sw: string; txt?: string }> = {
   applied:      { label: 'Applied',      sw: 'bg-ok', txt: 'text-ok' },
   failed:       { label: 'Failed',       sw: 'bg-accent', txt: 'text-accent' },
   skipped:      { label: 'Skipped',      sw: 'border border-hair', txt: 'text-mute' },
+  tracked:      { label: 'Tracked',      sw: 'border border-ok', txt: 'text-ink-2' },
 }
 export const Badge = ({ s }: { s: string }) => {
   const x = STATUS[s] ?? { label: s, sw: 'bg-mute' }

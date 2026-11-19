@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from config.settings import get_settings, update_settings
 from config.profile import CandidateProfile, load_profile, save_profile
@@ -21,6 +21,10 @@ class AppSettings(BaseModel):
     search_respect_robots: bool | None = None; search_llm_review: bool | None = None; indeed_host: str | None = None
     search_daily_pages: int | None = Field(None, ge=1, le=5000); search_block_cooldown_h: float | None = Field(None, ge=0, le=720)
     notion_pull_interval_s: int | None = Field(None, ge=0, le=86400); backup_interval_s: int | None = Field(None, ge=5, le=86400)
+    notify_webhook_url: str | None = Field(None, max_length=1000); notify_events: list[str] | None = None
+    digest_hour: int | None = Field(None, ge=-1, le=23); followup_after_days: int | None = Field(None, ge=1, le=90)
+    auto_ghost_days: int | None = Field(None, ge=0, le=365); auto_retry: int | None = Field(None, ge=0, le=10)
+    app_url: str | None = Field(None, max_length=200)
 
 
 @router.get("/settings")
@@ -28,14 +32,22 @@ def get():
     s = get_settings()
     return {"approval_mode": s.approval_mode, "daily_apply_cap": s.daily_apply_cap, "discovery_interval_min": s.discovery_interval_min, "min_match_score": s.min_match_score,
             "enabled_sources": s.enabled_sources, "notion_token": "***" if s.notion_token else "", "notion_database_id": s.notion_database_id,
-            "notion_pull_interval_s": s.notion_pull_interval_s, "backup_interval_s": s.backup_interval_s} | {
+            "notion_pull_interval_s": s.notion_pull_interval_s, "backup_interval_s": s.backup_interval_s,
+            "notify_webhook_url": "***" if s.notify_webhook_url else "", "notify_events": s.notify_events,
+            "digest_hour": s.digest_hour, "followup_after_days": s.followup_after_days, "auto_ghost_days": s.auto_ghost_days,
+            "auto_retry": s.auto_retry, "app_url": s.app_url} | {
             k: getattr(s, k) for k in SEARCH_KEYS}
 
 
 @router.put("/settings")
 def put(b: AppSettings):
     d = b.model_dump()
-    if d.get("notion_token") == "***": d["notion_token"] = None
+    for secret in ("notion_token", "notify_webhook_url"):   # "***" = unchanged (the UI never sees the real value)
+        if d.get(secret) == "***": d[secret] = None
+    if d.get("notify_webhook_url") and not d["notify_webhook_url"].startswith(("https://", "http://")):
+        raise HTTPException(422, "the webhook URL must start with https://")
+    if d.get("notify_events") is not None:
+        d["notify_events"] = [e for e in d["notify_events"] if e in __import__("notify").EVENTS]
     update_settings(**d); return {"ok": True}
 
 

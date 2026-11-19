@@ -3,12 +3,15 @@ import ReactDiffViewer from 'react-diff-viewer-continued'
 import { api, type Job, type JobDetail, type TailorReport } from '../api'
 import { Badge, Figure, Kicker, Msg, btn2Cls, btnAccentCls, btnCls, linkBtnCls, pad, useAction, useDark } from '../ui'
 import { TrackingPanel } from '../tracking'
+import { ReadinessBanner } from '../checklist'
+import { AddJob, type Capture } from '../addjob'
+import { JobQuestions } from '../answers'
 
 const FILTERS = [
   { key: 'all', label: 'All', match: (_: Job) => true },
   { key: 'review', label: 'Needs review', match: (j: Job) => j.status === 'needs_review' },
   { key: 'active', label: 'In progress', match: (j: Job) => ['scraped', 'scored', 'tailoring', 'tailored', 'applying'].includes(j.status) },
-  { key: 'applied', label: 'Applied', match: (j: Job) => j.status === 'applied' },
+  { key: 'applied', label: 'Applied', match: (j: Job) => j.status === 'applied' || j.status === 'tracked' },
   { key: 'closed', label: 'Closed', match: (j: Job) => ['skipped', 'failed'].includes(j.status) },
 ] as const
 
@@ -65,9 +68,10 @@ function TailorAudit({ r }: { r: TailorReport }) {
 function Review({ id, onChange }: { id: string; onChange: () => void }) {
   const [d, setD] = useState<JobDetail | null>(null)
   const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
   const a = useAction(); const cl = useAction()
   const diff = useDiffStyles()
-  useEffect(() => { setD(null); setErr(''); api(`/jobs/${id}`).then(setD).catch(e => setErr(e.message)) }, [id])
+  useEffect(() => { setD(null); setErr(''); setNote(''); api(`/jobs/${id}`).then(setD).catch(e => setErr(e.message)) }, [id])
 
   if (err) return <p className="font-mono text-[12px] text-accent">{err}</p>
   if (!d) return <div className="space-y-4"><div className="h-4 w-40 bg-paper-2" /><div className="h-12 w-3/4 bg-paper-2" /><div className="h-64 bg-paper-2" /></div>
@@ -83,7 +87,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
   return (
     <article>
       {/* Headline */}
-      <Kicker>{d.closed_at ? <span className="text-warn">Closed {d.closed_at.slice(0, 10)} — </span> : ''}{d.job_type === 'internship' ? 'Internship — ' : ''}{d.company} — {d.source}{d.location ? ` — ${d.location}` : ''}{d.is_remote ? ' — remote' : ''}</Kicker>
+      <Kicker>{d.origin === 'user' ? 'Added by you — ' : ''}{d.closed_at ? <span className="text-warn">Closed {d.closed_at.slice(0, 10)} — </span> : ''}{d.job_type === 'internship' ? 'Internship — ' : ''}{d.company} — {d.source}{d.location ? ` — ${d.location}` : ''}{d.is_remote ? ' — remote' : ''}</Kicker>
       <h2 className="mt-3 text-[clamp(32px,4.2vw,56px)] font-bold leading-[0.98] tracking-[-0.035em]">{d.title}</h2>
       <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
         <Badge s={d.status} />
@@ -94,7 +98,9 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
       {/* Decision bar */}
       <div className={`mt-8 flex flex-wrap items-center gap-3 border-y py-4 ${awaiting ? 'border-accent' : 'border-hair'}`}>
         {awaiting ? <>
-          <span className="mr-auto text-[14px] font-medium">Form filled and paused before submit.</span>
+          <span className="mr-auto text-[14px] font-medium">{d.questions.length
+            ? `Paused: ${d.questions.length} answer${d.questions.length === 1 ? '' : 's'} needed — answer below, or type them into the open form and approve.`
+            : 'Form filled and paused before submit.'}</span>
           <button className={btnAccentCls} disabled={a.busy} onClick={() => confirm(`Submit the application to ${d.company} now?`) && act('approve')}>Approve &amp; submit</button>
           <button className={btn2Cls} disabled={a.busy} onClick={() => act('skip')}>Skip</button>
         </> : ['failed', 'skipped'].includes(d.status) ? <>
@@ -106,7 +112,12 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
         </>}
       </div>
       <Msg m={a.msg} />
-      {d.error && <p className="mt-4 border-l-2 border-warn pl-3 text-[13px] leading-relaxed text-warn">{d.error}</p>}
+      {d.error && !(awaiting && d.questions.length && d.error.startsWith('needs human: blockers=[]')) &&
+        <p className="mt-4 border-l-2 border-warn pl-3 text-[13px] leading-relaxed text-warn">{d.error}</p>}
+
+      {note && <Msg m={{ ok: true, text: note }} />}
+      {awaiting && <JobQuestions key={d.id + d.questions.length} questions={d.questions}
+        onSaved={m => { setNote(m); api(`/jobs/${id}`).then(setD).catch(() => {}); onChange() }} />}
 
       <TrackingPanel job={d} onSaved={j => { setD({ ...d, ...j }); onChange() }} />
 
@@ -188,7 +199,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
   )
 }
 
-export default function Pipeline() {
+export default function Pipeline({ capture = null }: { capture?: Capture | null }) {
   const [jobs, setJobs] = useState<Job[]>([])
   const [loaded, setLoaded] = useState(false)
   const [sel, setSel] = useState<string | null>(null)
@@ -209,11 +220,12 @@ export default function Pipeline() {
 
   return (
     <div>
+      <ReadinessBanner />
       {/* Figures */}
       <div className="grid grid-cols-2 gap-x-6 gap-y-8 md:grid-cols-4">
         <Figure value={pad(jobs.length)} label={`Found · ${jobs.filter(j => j.job_type === 'internship').length} internships`} />
         <Figure value={pad(review.length)} label="Awaiting your review" accent={review.length > 0} />
-        <Figure value={pad(jobs.filter(j => ['applied'].includes(j.status)).length)} label="Applied, all time" />
+        <Figure value={pad(jobs.filter(j => !['not_applied', 'withdrawn'].includes(j.application_status)).length)} label="Applied, all time" />
         <Figure value={<>{st?.applied_today ?? 0}<span className="text-mute">/{st?.daily_cap ?? '—'}</span></>} label="Submitted today / cap" />
       </div>
 
@@ -221,11 +233,18 @@ export default function Pipeline() {
       <div className="mt-10 flex flex-wrap items-center gap-3 border-t-2 border-rule pt-4">
         <button className={btnCls} disabled={a.busy} onClick={() => a.run(async () => { await api('/pipeline/discover', { method: 'POST' }); setTimeout(load, 1500); return 'Search started — new jobs and internships appear below once it finishes. Progress is under Tracker → Searches.' })}>{st?.searching ? 'Searching…' : 'Run discovery'}</button>
         <button className={btn2Cls} onClick={() => api(`/pipeline/${st?.paused ? 'resume' : 'pause'}`, { method: 'POST' }).then(load)}>{st?.paused ? 'Resume worker' : 'Pause worker'}</button>
+        {st?.ready_to_submit > 0 && (
+          <button className={btnAccentCls} disabled={a.busy} onClick={() => confirm(`Submit ${st.ready_to_submit} completely filled application(s) now?`) && a.run(async () => {
+            const r = await api<{ approved: string[] }>('/pipeline/approve-ready', { method: 'POST' }); load()
+            return `Submitted ${r.approved.length} application(s).`
+          })}>Approve all ready ({st.ready_to_submit})</button>
+        )}
         <span className="ml-auto text-[13px] text-mute">
           Mode: <span className={`font-semibold ${st && !st.approval_mode ? 'text-accent' : 'text-ink'}`}>{!st ? '—' : st.approval_mode ? 'Approval gate' : 'Full-auto'}</span>
         </span>
       </div>
       <Msg m={a.msg} />
+      <div className="mt-4"><AddJob key={capture?.url ?? 'none'} capture={capture} onAdded={id => { load(); setSel(id) }} /></div>
 
       {/* Index + review */}
       <div className="mt-10 grid grid-cols-12 gap-x-8 gap-y-10">

@@ -119,6 +119,7 @@ def test_service_sync_and_restore(pg_server_url):
             for m in (JobSighting, LogEntry, SeenUrl, Job, SearchRun): s.execute(delete(m))
             s.commit()
         svc.restore()
-        assert counts(primary) == {"search_runs": 1, "jobs": 2, "job_sightings": 2, "seen_urls": 1, "logs": 3}
+        assert counts(primary) == {"search_runs": 1, "jobs": 2, "job_sightings": 2, "seen_urls": 1, "logs": 3,
+                                   "answer_bank": 0, "app_state": 0}
         with SL() as s:                                              # and keeps working (sequences moved on)
             s.add(LogEntry(message="after restore")); s.commit()

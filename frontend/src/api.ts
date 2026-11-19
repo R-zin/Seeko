@@ -23,6 +23,7 @@ export interface Job {
   /* Your own tracking (editable here and in Notion; synced both ways) */
   application_status: string; next_step: string; next_step_date: string | null; notes: string
   notion_state: 'synced' | 'pending' | 'error' | 'deleted' | 'off'; notion_error: string
+  origin: 'search' | 'user'; attempts: number; retry_at: string | null
 }
 
 export type Tracking = Partial<Pick<Job, 'application_status' | 'next_step' | 'next_step_date' | 'notes'>> & { applied_at?: string | null }
@@ -57,7 +58,11 @@ export interface SearchRun {
     progress?: { step: string; leads: number; read: number; sources_done: string[]; at?: string }
   }
 }
-export interface JobDetail extends Job { diff: string; base_tex: string; tailored_tex: string; has_pdf: boolean; has_screenshot: boolean; cover_letter: string; jd_text: string; tailor_report: TailorReport | null }
+export interface JobDetail extends Job { diff: string; base_tex: string; tailored_tex: string; has_pdf: boolean; has_screenshot: boolean; cover_letter: string; jd_text: string; tailor_report: TailorReport | null; questions: SavedQ[] }
+
+/** A form question in the answer bank. `answer` null (or not fitting `options`) = waiting for you. */
+export interface SavedQ { key: string; question: string; kind: string; options: string[]; answer: string | null; source: string
+  times_seen: number; fits: boolean; jobs_waiting?: number }
 
 export interface TailorReport {
   segments: number; base_pages: number; pages?: number; engine?: string; fallback?: string
@@ -66,3 +71,6 @@ export interface TailorReport {
   reverted: { id: string; reason: string }[]
   passes: { pass: string; proposed?: number; accepted?: number; error?: string }[]
 }
+
+export interface Check { key: string; title: string; level: 'ok' | 'info' | 'warn' | 'error'; detail: string; fix: string; where: string; ok: boolean }
+export interface Readiness { ready: boolean; errors: number; warnings: number; checks: Check[] }

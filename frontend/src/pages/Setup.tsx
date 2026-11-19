@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type BackupStatus, type NotionStatus } from '../api'
 import { ResumeSection } from '../resume'
+import { Checklist } from '../checklist'
+import { AnswersSection } from '../answers'
 import { Check, Field, Kicker, Msg, Section, areaCls, btn2Cls, btnCls, inputCls, linkBtnCls, useAction } from '../ui'
 
 /** Comma-separated list input that keeps the raw text while typing (commas would otherwise vanish). */
@@ -150,7 +152,7 @@ function ProfileSections() {
   </>
 }
 
-/* 05 — Sources ------------------------------------------------------------ */
+/* 06 — Sources ------------------------------------------------------------ */
 const BOARDS = [
   { key: 'watchlist', label: 'Career pages', note: 'ATS APIs and browsed careers pages. Safe.' },
   { key: 'linkedin', label: 'LinkedIn', note: 'Login required. ToS risk.' },
@@ -166,7 +168,7 @@ function SourcesSection() {
   const toggle = (k: string, on: boolean) => setS({ ...s, enabled_sources: on ? [...s.enabled_sources, k] : s.enabled_sources.filter((y: string) => y !== k) })
 
   return <>
-    <Section n="05" title="Sources" note={<>LinkedIn, Indeed, Glassdoor and Internshala restrict automation in their terms and may limit your account. <span className="text-accent">Off by default — keep volumes low.</span></>}>
+    <Section n="06" title="Sources" note={<>LinkedIn, Indeed, Glassdoor and Internshala restrict automation in their terms and may limit your account. <span className="text-accent">Off by default — keep volumes low.</span></>}>
       {!s ? <Skeleton /> : <>
         <ul className="border-t border-ink">
           {BOARDS.map(b => {
@@ -222,7 +224,7 @@ function SourcesSection() {
   </>
 }
 
-/* 06 — Notion ------------------------------------------------------------- */
+/* 07 — Notion ------------------------------------------------------------- */
 const ago = (iso: string | null) => {
   if (!iso) return 'never'
   const s = Math.max(0, (Date.now() - Date.parse(iso + (iso.endsWith('Z') ? '' : 'Z'))) / 1000)
@@ -250,7 +252,7 @@ function NotionSection() {
   const schema = st?.schema
 
   return (
-    <Section n="06" title="Notion" note={<>Every job, its status and your application tracking, kept in your Notion database through Notion’s MCP server. Changes reach Notion within seconds; edits to the tracking columns in Notion come back.</>}
+    <Section n="07" title="Notion" note={<>Every job, its status and your application tracking, kept in your Notion database through Notion’s MCP server. Changes reach Notion within seconds; edits to the tracking columns in Notion come back.</>}
       aside={<p className="mt-4 max-w-[34ch] font-mono text-[11px] leading-relaxed text-mute">{PROPS.join(' · ')}<br /><span className="text-ink-2">Page body: the full job description.</span></p>}>
       {!s ? <Skeleton /> : <>
         <ol className="mb-6 list-decimal space-y-1 pl-5 text-[13.5px] leading-relaxed text-ink-2">
@@ -299,7 +301,7 @@ function NotionSection() {
   )
 }
 
-/* 07 — Backup ------------------------------------------------------------- */
+/* 08 — Backup ------------------------------------------------------------- */
 function BackupSection() {
   const [b, setB] = useState<BackupStatus | null>(null)
   const a = useAction()
@@ -307,7 +309,7 @@ function BackupSection() {
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t) }, [])
 
   return (
-    <Section n="07" title="Backup" note="A second PostgreSQL server that keeps a live copy of every job, run and log. It can take over if the main database is lost.">
+    <Section n="08" title="Backup" note="A second PostgreSQL server that keeps a live copy of every job, run and log. It can take over if the main database is lost.">
       {!b ? <Skeleton /> : !b.configured ? (
         <div className="max-w-[70ch] space-y-3 text-[14px] leading-relaxed text-ink-2">
           <p>Off. Set <span className="font-mono text-[12.5px]">BACKUP_DATABASE_URL</span> in <span className="font-mono text-[12.5px]">.env</span> and restart:</p>
@@ -341,6 +343,62 @@ function BackupSection() {
   )
 }
 
+/* 09 — Notifications & follow-ups ------------------------------------------ */
+const EVENTS: [string, string][] = [
+  ['needs_review', 'A form is waiting for your approval or answers'], ['applied', 'Seeko submitted on its own (full-auto)'],
+  ['failed', 'A job failed'], ['new_jobs', 'A search found new jobs'], ['digest', 'Daily digest of follow-ups and deadlines'],
+]
+
+function NotifySection() {
+  const [s, setS] = useState<any>(null)
+  const a = useAction()
+  useEffect(() => { api('/settings').then(setS) }, [])
+  const keys = ['notify_webhook_url', 'notify_events', 'digest_hour', 'followup_after_days', 'auto_ghost_days', 'auto_retry', 'app_url']
+  const save = () => api('/settings', { method: 'PUT', json: Object.fromEntries(keys.map(k => [k, s[k]])) })
+  const toggle = (k: string, on: boolean) => setS({ ...s, notify_events: on ? [...s.notify_events, k] : s.notify_events.filter((x: string) => x !== k) })
+  return (
+    <Section n="09" title="Notifications" note="Hear about forms waiting for you without keeping Seeko open: Slack, Discord, ntfy (phone push) or any webhook.">
+      {!s ? <Skeleton /> : <>
+        <div className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
+          <Field label="Webhook URL" hint="Slack / Discord incoming webhook, https://ntfy.sh/your-topic, or any URL taking JSON.">
+            <input className={inputCls + ' font-mono text-[13px]'} type="password" autoComplete="off" value={s.notify_webhook_url} placeholder="https://ntfy.sh/my-seeko-alerts" onChange={e => setS({ ...s, notify_webhook_url: e.target.value })} />
+          </Field>
+          <Field label="Seeko address in links" hint="Where you open Seeko (http://127.0.0.1:8000 when serving the build).">
+            <input className={inputCls + ' font-mono text-[13px]'} value={s.app_url} onChange={e => setS({ ...s, app_url: e.target.value })} />
+          </Field>
+        </div>
+        <fieldset className="mt-6"><legend><Kicker>Tell me when</Kicker></legend>
+          <div className="mt-2 grid grid-cols-1 gap-y-2 sm:grid-cols-2">
+            {EVENTS.map(([k, l]) => <Check key={k} checked={s.notify_events.includes(k)} onChange={v => toggle(k, v)}>{l}</Check>)}
+          </div>
+        </fieldset>
+        <Kicker className="mt-10 block border-b border-ink pb-2">Follow-ups</Kicker>
+        <div className="mt-5 grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2 xl:grid-cols-4">
+          <Field label="Digest at, local hour" hint="-1 = no digest.">
+            <input type="number" min={-1} max={23} className={inputCls + ' tabular-nums'} value={s.digest_hour} onChange={e => setS({ ...s, digest_hour: +e.target.value })} />
+          </Field>
+          <Field label="Follow up after, days" hint="An application with no news this long shows up as due.">
+            <input type="number" min={1} max={90} className={inputCls + ' tabular-nums'} value={s.followup_after_days} onChange={e => setS({ ...s, followup_after_days: +e.target.value })} />
+          </Field>
+          <Field label="Mark “No response” after, days" hint="0 = never mark it for you.">
+            <input type="number" min={0} max={365} className={inputCls + ' tabular-nums'} value={s.auto_ghost_days} onChange={e => setS({ ...s, auto_ghost_days: +e.target.value })} />
+          </Field>
+          <Field label="Retries after a timeout" hint="Rate limits and timeouts are retried with a growing pause.">
+            <input type="number" min={0} max={10} className={inputCls + ' tabular-nums'} value={s.auto_retry} onChange={e => setS({ ...s, auto_retry: +e.target.value })} />
+          </Field>
+        </div>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <button className={btnCls} disabled={a.busy} onClick={() => a.run(async () => { await save(); return 'Saved.' })}>Save</button>
+          <button className={btn2Cls} disabled={a.busy || !s.notify_webhook_url} onClick={() => a.run(async () => {
+            await save(); const r = await api('/notify/test', { method: 'POST' }); return `Test sent to your ${r.kind} webhook.`
+          })}>Save & send test</button>
+        </div>
+        <Msg m={a.msg} />
+      </>}
+    </Section>
+  )
+}
+
 export default function Setup() {
-  return <div><ModelSection /><ResumeSection /><ProfileSections /><SourcesSection /><NotionSection /><BackupSection /></div>
+  return <div><Checklist /><ModelSection /><ResumeSection /><ProfileSections /><AnswersSection /><SourcesSection /><NotionSection /><BackupSection /><NotifySection /></div>
 }

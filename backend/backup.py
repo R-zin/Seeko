@@ -25,7 +25,7 @@ from sqlalchemy import Engine, create_engine, delete, func, select, text
 from sqlalchemy.engine import make_url
 import db
 from config.settings import DATA_DIR, get_settings
-from db import Job, JobSighting, LogEntry, SearchRun, SeenUrl, utcnow
+from db import AppState, Job, JobSighting, LogEntry, SavedAnswer, SearchRun, SeenUrl, utcnow
 
 BACKUP_PG_DIR = DATA_DIR / "postgres-backup"
 OVERLAP = timedelta(minutes=5)
@@ -42,7 +42,8 @@ class Table:
 
 # Parents before children (job_sightings references search_runs and jobs); deletes run in reverse.
 TABLES = (Table(SearchRun, "id", "updated_at"), Table(Job, "id", "updated_at"), Table(JobSighting, "id", "seen_at"),
-          Table(SeenUrl, "canonical_url", "seen_at"), Table(LogEntry, "id", "ts"))
+          Table(SeenUrl, "canonical_url", "seen_at"), Table(LogEntry, "id", "ts"), Table(SavedAnswer, "key", "updated_at"),
+          Table(AppState, "key", "updated_at"))
 SERIAL = (("job_sightings", "id"), ("logs", "id"))
 
 

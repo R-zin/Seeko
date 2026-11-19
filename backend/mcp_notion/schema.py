@@ -13,12 +13,12 @@ RICH_TEXT_ITEMS = 100      # Notion: rich-text objects per property / block
 
 STATUS_LABELS = {"scraped": "Scraped", "scored": "Scored", "tailoring": "Tailoring", "tailored": "Tailored",
                  "applying": "Applying", "needs_review": "Needs Review", "applied": "Applied", "failed": "Failed",
-                 "skipped": "Skipped"}
+                 "skipped": "Skipped", "tracked": "Tracked"}
 APPLICATION_COLORS = {"Not applied": "default", "Applied": "blue", "Assessment": "purple", "Interviewing": "yellow",
                       "Offer": "green", "Accepted": "green", "Rejected": "red", "Withdrawn": "gray",
                       "No response": "brown"}
 STATUS_COLORS = {"Scraped": "default", "Scored": "gray", "Tailoring": "brown", "Tailored": "blue", "Applying": "purple",
-                 "Needs Review": "orange", "Applied": "green", "Failed": "red", "Skipped": "gray"}
+                 "Needs Review": "orange", "Applied": "green", "Failed": "red", "Skipped": "gray", "Tracked": "default"}
 
 
 @dataclass(frozen=True)

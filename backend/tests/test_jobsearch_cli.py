@@ -71,3 +71,17 @@ def test_run_paths(seeded, monkeypatch, capsys):
         cli.main(["run", "--source", "myspace"])                     # unknown source rejected by argparse
     assert cli.main(["resume", "no-such-run"]) == 1                  # no checkpoint
     assert cli.main(["import-sqlite", "/nonexistent/seeko.db"]) == 0
+
+
+def test_add_and_doctor_commands(seeded, capsys, tmp_path):
+    desc = tmp_path / "jd.txt"; desc.write_text("Own the payments ledger in Go and PostgreSQL. " * 6)
+    assert cli.main(["add", "--title", "Payments Engineer (CLI)", "--company", "clico", "--text", f"@{desc}", "--applied"]) == 0
+    out = capsys.readouterr().out
+    assert "added:" in out and "Payments Engineer (CLI)" in out and "tracked as applied" in out
+    assert cli.main(["add", "--title", "Payments Engineer (CLI)", "--company", "clico", "--text", "x", "--applied"]) == 0
+    assert "already known" in capsys.readouterr().out
+    assert cli.main(["add", "--title", "No Link (CLI)", "--company", "clico", "--text", "x"]) == 1      # applying needs a link
+    assert "link" in capsys.readouterr().err
+    code = cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert code in (0, 1) and "Language model" in out and "Chromium for Playwright" in out

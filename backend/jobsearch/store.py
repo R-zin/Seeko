@@ -9,6 +9,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Iterable
 from sqlalchemy import Select, func, literal_column, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 import db
 from db import FTS_DOC, Job, JobSighting, SearchRun, SeenUrl, utcnow
@@ -114,6 +115,11 @@ class Store:
                     out[dk] = jid
         return out
 
+    def add_job(self, p: dict, origin: str = "user", applied: bool = False) -> tuple[str, bool]:
+        """Store one job added by hand (jobsearch/intake.py). Returns (job id, created). A job already stored (same
+        link, or same company + title) is returned as it is; with `applied` it is marked applied if it was not yet."""
+        return _add_job(self, p, origin, applied)
+
     def recently_rejected(self, canonical_urls: list[str], days: int) -> set[str]:
         if days <= 0:
             return set()
@@ -186,6 +192,35 @@ class Store:
         if new_ids or closed or reopened:
             db.jobs_changed()   # Core statements skip the ORM events: wake the Notion syncer ourselves
         return {"new_job_ids": list(dict.fromkeys(new_ids)), "known_bumped": bumped, "closed": closed, "reopened": reopened}
+
+
+def _add_job(store: "Store", p: dict, origin: str, applied: bool) -> tuple[str, bool]:
+    cu = p.get("canonical_url") or canonical_url(p["url"])
+    dk = dedupe_key(p.get("company", ""), p["title"])
+    now = utcnow()
+    with store._sf() as s:
+        existing = s.scalar(select(Job).where((Job.canonical_url == cu) | (Job.dedupe_key == dk)).limit(1))
+        if existing is not None:
+            if applied and existing.application_status == "not_applied":
+                db.update_application(existing, application_status="applied")
+                if existing.status in ("scraped", "scored"): existing.status = "tracked"
+                s.commit()
+            return existing.id, False
+        job = Job(id=job_id_for(cu), source=p["source"], company=(p.get("company") or "")[:300], title=p["title"][:300],
+                  location=(p.get("location") or "")[:300], url=p.get("url") or "", canonical_url=cu, dedupe_key=dk,
+                  jd_text=p.get("jd_text") or "", discovered_at=now, last_seen_at=now, origin=origin,
+                  status="tracked" if applied else "scraped", job_type=p.get("job_type", "job"),
+                  employment_type=(p.get("employment_type") or "")[:100], is_remote=bool(p.get("is_remote")),
+                  posted_at=parse_date(p.get("posted_at")), valid_through=parse_date(p.get("valid_through")),
+                  jd_source=p.get("jd_source", ""), relevance=p.get("relevance"), times_seen=1)
+        if applied: db.update_application(job, application_status="applied")
+        s.add(job)
+        try:
+            s.commit()
+        except IntegrityError:   # added at the same moment by a search: return that one
+            s.rollback()
+            return s.scalar(select(Job.id).where((Job.canonical_url == cu) | (Job.dedupe_key == dk)).limit(1)), False
+        return job.id, True
 
 
 def jobs_query(session: Session, *, status: str | None = None, source: str | None = None, job_type: str | None = None,

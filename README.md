@@ -68,6 +68,31 @@ CLI, from `backend/`:
 ```
 LangGraph Studio: `pip install "langgraph-cli[inmem]"` and `langgraph dev` in `backend/` (graph `job_search`, see `langgraph.json`).
 
+## Everyday automation
+- **Checklist.** Setup → *00 Checklist* (or `python -m jobsearch doctor`) lists what still blocks the automation — model,
+  base résumé, LaTeX compiler, Chromium, contact details, target roles, sources — each with its fix. The Pipeline page shows a
+  banner while anything blocking is left.
+- **Add a job you found.** Pipeline → *Add a job by link*: paste a posting link (read once, the same careful way as the search:
+  robots.txt on careers pages, a CAPTCHA or login wall stops it), or paste title / company / description. Or drag the
+  **＋ Seeko bookmarklet** to your bookmarks bar and click it on any job page — even LinkedIn while you are signed in: it sends
+  the text of the tab you are looking at, so Seeko never opens that site itself. Choose *Tailor and fill it* (never skipped for
+  a low match score: you picked it) or *I applied already* (tracked only). CLI: `python -m jobsearch add <url> [--applied]`.
+- **Answer bank.** A required question your profile and résumé do not answer (notice period, relocation, "how did you hear
+  about us"…) used to pause every form that asked it. Now it is asked once: answer it in the job's review, or type it into the
+  paused form before you approve (Seeko learns it), and every later form reuses it — matched to that form's options ("Yes" fills
+  "Yes, I am authorized…"). Jobs that were only waiting on those questions are filled again automatically. Setup → *Answers*
+  lists everything forms have asked, with your answers.
+- **Smarter queue.** The worker takes jobs closing within a week first, then jobs you added, then those furthest along, best
+  score first. Timeouts, rate limits and 5xx errors are retried with a growing pause (`AUTO_RETRY`, default 3) from the step the
+  job had reached, instead of marking it failed. *Approve all ready* submits every completely filled form in one go.
+- **Notifications.** Setup → *Notifications*: a Slack or Discord incoming webhook, an ntfy topic (`https://ntfy.sh/<topic>`,
+  push to your phone) or any URL taking JSON. You hear when a form is waiting for you, when full-auto submitted, when a job
+  failed, when a search found jobs, and a daily digest.
+- **Agenda & follow-ups.** Tracker → *01 Agenda*: next steps due (overdue first), applications with no news for
+  `FOLLOWUP_AFTER_DAYS` (one click: no response / rejected / interviewing), postings closing within 5 days that you have not
+  applied to, and what is waiting for you. The same list is the daily digest at `DIGEST_HOUR` (local). Optionally
+  `AUTO_GHOST_DAYS` marks applications with no answer that long as "No response" (synced to Notion).
+
 ## Notion tracker
 Seeko keeps a Notion database in step with its own, through Notion's MCP server (`npx -y @notionhq/notion-mcp-server@2`,
 Notion API 2025-09-03).
@@ -118,11 +143,18 @@ Setup → Backup shows when it last copied and how many rows it holds.
 - LinkedIn/Indeed/Glassdoor/Internshala restrict automation in their terms and may restrict your account. They are off by default; use low volumes at your own risk.
 - Job search never solves or bypasses a CAPTCHA or login wall: the source stops for that run and the reason is shown under Tracker → Searches.
 - If the server restarts while a job awaits approval, the live browser page is lost (approve returns 409); re-run that job.
+- The API refuses writes that a browser sends from another website (Origin check), so a page you visit cannot submit
+  applications or change settings through your local Seeko. Scripts and the CLI (no Origin header) are unaffected.
+- The bookmarklet only reads the tab you click it on and hands it to Seeko's own page; adding the job still needs your click,
+  and a job you add is filled like any other — never submitted without approval in gate mode.
 
 ## Tests
 `cd backend && .venv/bin/python -m pytest -q` — mock OpenAI server (tier fallback, 401/404), LaTeX compile + overflow recovery + fabrication guards,
 fake Notion MCP server over stdio (schema setup, live push, no duplicate pages, deleted pages, per-job backoff, two-way merge),
-backup mirror (full / incremental / deletes / sequences / restore), dedupe/ATS parsing, Playwright dry-run on Greenhouse/Lever-style fixtures, and the job search graph end to end
+backup mirror (full / incremental / deletes / sequences / restore), job intake (real Chromium read, robots.txt, bot check,
+the bookmarklet run in a browser), answer bank (saved answers fill a fixture form without the model, learning from a paused
+form, re-queueing), queue order and transient-failure retries, notifications per destination, agenda/digest, readiness
+check, dedupe/ATS parsing, Playwright dry-run on Greenhouse/Lever-style fixtures, and the job search graph end to end
 (real headless Chromium on a fixture careers site and a CAPTCHA'd board, checkpoint resume). Storage tests run on SQLite and on a real
 PostgreSQL: `TEST_DATABASE_URL` (CI uses a service container; tests only touch their own schemas) or else the embedded server.
 `NOTION_TOKEN` enables a live Notion smoke test.
