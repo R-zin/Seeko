@@ -1,55 +1,68 @@
 @import "tailwindcss";
 
-/* ── Swiss editorial tokens ─────────────────────────────────────────────
-   Ink on warm paper, one accent (Swiss red), hairline rules, no radii. */
+/* ── Monochrome tokens (prototyped in Stitch) ───────────────────────────
+   Pure black & white: hierarchy comes from type weight, fills and hairlines,
+   never from hue. "accent" = full-strength ink (used for what needs you),
+   ok / warn = quieter inks. Light and dark are exact inverses. */
 :root {
-  --paper: #f4f2ec;
-  --paper-2: #ebe8e0;
-  --ink: #111111;
-  --ink-2: #3a3a3a;
-  --mute: #6b6862;
-  --rule: #111111;
-  --hair: #cfcbc1;
-  --accent: #e4002b;
+  --paper: #ffffff;
+  --paper-2: #f5f5f5;
+  --paper-3: #ebebeb;
+  --ink: #0a0a0a;
+  --ink-2: #404040;
+  --mute: #737373;
+  --rule: #0a0a0a;
+  --hair: #e5e5e5;
+  --accent: #0a0a0a;
   --accent-ink: #ffffff;
-  --ok: #0f6b3a;
-  --warn: #9a5b00;
+  --ok: #0a0a0a;
+  --warn: #525252;
+  --shadow: 0 1px 2px rgba(10, 10, 10, .06), 0 8px 24px rgba(10, 10, 10, .08);
+  --radius: 6px;
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #0f0f0e;
-    --paper-2: #1a1a18;
-    --ink: #f1efe8;
-    --ink-2: #c9c6be;
-    --mute: #8f8b82;
-    --rule: #f1efe8;
-    --hair: #34332f;
-    --accent: #ff3347;
-    --accent-ink: #0f0f0e;
-    --ok: #4cc38a;
-    --warn: #e0a645;
+    --paper: #0a0a0a;
+    --paper-2: #161616;
+    --paper-3: #222222;
+    --ink: #fafafa;
+    --ink-2: #c4c4c4;
+    --mute: #8a8a8a;
+    --rule: #fafafa;
+    --hair: #2a2a2a;
+    --accent: #fafafa;
+    --accent-ink: #0a0a0a;
+    --ok: #fafafa;
+    --warn: #b0b0b0;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 32px rgba(0, 0, 0, .6);
+    color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --paper: #0f0f0e;
-  --paper-2: #1a1a18;
-  --ink: #f1efe8;
-  --ink-2: #c9c6be;
-  --mute: #8f8b82;
-  --rule: #f1efe8;
-  --hair: #34332f;
-  --accent: #ff3347;
-  --accent-ink: #0f0f0e;
-  --ok: #4cc38a;
-  --warn: #e0a645;
+  --paper: #0a0a0a;
+  --paper-2: #161616;
+  --paper-3: #222222;
+  --ink: #fafafa;
+  --ink-2: #c4c4c4;
+  --mute: #8a8a8a;
+  --rule: #fafafa;
+  --hair: #2a2a2a;
+  --accent: #fafafa;
+  --accent-ink: #0a0a0a;
+  --ok: #fafafa;
+  --warn: #b0b0b0;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 32px rgba(0, 0, 0, .6);
+  color-scheme: dark;
 }
 
 @theme inline {
-  --font-sans: "Inter Tight", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-sans: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --color-paper: var(--paper);
   --color-paper-2: var(--paper-2);
+  --color-paper-3: var(--paper-3);
   --color-ink: var(--ink);
   --color-ink-2: var(--ink-2);
   --color-mute: var(--mute);
@@ -59,6 +72,7 @@
   --color-accent-ink: var(--accent-ink);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
+  --ease-out-soft: cubic-bezier(.22, 1, .36, 1);
 }
 
 html { background: var(--paper); }
@@ -66,22 +80,62 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-feature-settings: "ss01", "cv11", "tnum" 0;
+  font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  transition: background-color .3s ease, color .3s ease;
 }
-::selection { background: var(--accent); color: var(--accent-ink); }
+::selection { background: var(--ink); color: var(--paper); }
 
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
 
-/* Native controls: square, ink-coloured */
+/* Native controls */
 input[type="checkbox"], input[type="radio"] { accent-color: var(--ink); width: 14px; height: 14px; }
 input[type="number"]::-webkit-inner-spin-button { opacity: .4; }
 select { background-image: none; }
+input[type="date"] { color-scheme: inherit; }
 
-/* Quiet scrollbars */
 * { scrollbar-width: thin; scrollbar-color: var(--hair) transparent; }
 
+/* ── Motion ─────────────────────────────────────────────────────────────
+   Short, eased, and only on opacity/transform so it stays smooth. */
 @keyframes seeko-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
+@keyframes seeko-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+@keyframes seeko-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes seeko-pop { from { opacity: 0; transform: translateY(-6px) scale(.98) } to { opacity: 1; transform: none } }
+@keyframes seeko-toast { from { opacity: 0; transform: translateY(12px) scale(.98) } to { opacity: 1; transform: none } }
+@keyframes seeko-shimmer { from { background-position: -200% 0 } to { background-position: 200% 0 } }
+
 .pulse { animation: seeko-pulse 1.4s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+.anim-in { animation: seeko-in .42s var(--ease-out-soft) both; }
+.anim-fade { animation: seeko-fade .25s ease both; }
+.anim-pop { animation: seeko-pop .2s var(--ease-out-soft) both; }
+.anim-toast { animation: seeko-toast .28s var(--ease-out-soft) both; }
+
+/* Lists reveal item by item (first 12 staggered, the rest at once) */
+.stagger > * { animation: seeko-in .38s var(--ease-out-soft) both; }
+.stagger > *:nth-child(1) { animation-delay: 0ms } .stagger > *:nth-child(2) { animation-delay: 25ms }
+.stagger > *:nth-child(3) { animation-delay: 50ms } .stagger > *:nth-child(4) { animation-delay: 75ms }
+.stagger > *:nth-child(5) { animation-delay: 100ms } .stagger > *:nth-child(6) { animation-delay: 125ms }
+.stagger > *:nth-child(7) { animation-delay: 150ms } .stagger > *:nth-child(8) { animation-delay: 175ms }
+.stagger > *:nth-child(9) { animation-delay: 200ms } .stagger > *:nth-child(10) { animation-delay: 225ms }
+.stagger > *:nth-child(11) { animation-delay: 250ms } .stagger > *:nth-child(12) { animation-delay: 275ms }
+
+/* Loading placeholders shimmer instead of sitting still */
+.bg-paper-2.skeleton, .skeleton {
+  background: linear-gradient(90deg, var(--paper-2) 25%, var(--paper-3) 50%, var(--paper-2) 75%);
+  background-size: 200% 100%; animation: seeko-shimmer 1.4s linear infinite; border-radius: var(--radius);
+}
+
+/* Smooth tab / theme changes where the browser supports view transitions */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .22s; animation-timing-function: ease; }
+
+kbd, .kbd {
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 1; padding: 3px 5px; border-radius: 4px;
+  border: 1px solid var(--hair); background: var(--paper-2); color: var(--ink-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0ms !important; transition-duration: .01ms !important; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+}

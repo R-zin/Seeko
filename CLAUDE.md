@@ -84,6 +84,14 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
   per two-way field against `notion_base` (Seeko wins conflicts). Transient errors back off globally, others per job
   (`notion_attempts`/`notion_retry_at`). Never block the pipeline on Notion.
 
+## Frontend (frontend/src)
+- Monochrome design tokens in `index.css` (`accent`/`ok`/`warn` are inks, not hues: distinguish states by fill / outline /
+  shape, never colour). Motion helpers: `.anim-in`, `.anim-pop`, `.anim-fade`, `.stagger`, `.skeleton`; all disabled by
+  `prefers-reduced-motion`. `ui.tsx` primitives + theme (`setTheme`/`cycleTheme`, localStorage) + `toast()`/`<Toaster>`.
+- `App.tsx` top bar (sliding segmented tabs, view transitions), global shortcuts; `palette.tsx` command palette + shortcut
+  sheet; Pipeline shortcuts in `pages/Pipeline.tsx` (`typing()` decides when keys belong to a text field). Cross-component
+  events: `seeko:select-job` (detail = job id), `seeko:add-job`.
+
 ## Conventions / invariants
 - Approval gate is the default; full-auto is opt-in, capped daily, and must pause on CAPTCHA/2FA/unknown required fields.
 - Never fabricate resume content: tailoring may only rephrase existing facts. Keep `tailor/tailor.py:check_edit` and `validate` strict;

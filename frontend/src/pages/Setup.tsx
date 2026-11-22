@@ -122,7 +122,7 @@ function ProfileSections() {
           <Field label="Minimum match score" hint="Jobs scoring below this are skipped.">
             <div className="flex items-center gap-4">
               <input type="range" min={0} max={100} value={p.search.min_match_score} onChange={e => up('search', 'min_match_score', +e.target.value)} className="w-full accent-[var(--ink)]" />
-              <span className="w-12 text-right text-[28px] font-bold leading-none tracking-[-0.03em] tabular-nums">{p.search.min_match_score}</span>
+              <span className="w-12 text-right text-[28px] font-semibold leading-none tracking-[-0.03em] tabular-nums">{p.search.min_match_score}</span>
             </div>
           </Field>
           <div className="flex items-end pb-2"><Check checked={p.search.remote_only} onChange={v => up('search', 'remote_only', v)}>Remote only</Check></div>
@@ -288,9 +288,9 @@ function NotionSection() {
         <Msg m={n.msg} />
         {st?.configured && (
           <dl className="mt-8 grid grid-cols-2 gap-x-8 gap-y-4 border-t border-hair pt-4 text-[13px] sm:grid-cols-4">
-            <div><dt><Kicker>Pages</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{st.synced}</dd></div>
-            <div><dt><Kicker>Waiting</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{st.pending}</dd></div>
-            <div><dt><Kicker>Errors</Kicker></dt><dd className={`mt-1 text-[22px] font-bold tabular-nums ${st.errors ? 'text-accent' : ''}`}>{st.errors}</dd></div>
+            <div><dt><Kicker>Pages</Kicker></dt><dd className="mt-1 text-[22px] font-semibold tabular-nums">{st.synced}</dd></div>
+            <div><dt><Kicker>Waiting</Kicker></dt><dd className="mt-1 text-[22px] font-semibold tabular-nums">{st.pending}</dd></div>
+            <div><dt><Kicker>Errors</Kicker></dt><dd className={`mt-1 text-[22px] font-semibold tabular-nums ${st.errors ? 'text-accent' : ''}`}>{st.errors}</dd></div>
             <div><dt><Kicker>Last push / pull</Kicker></dt><dd className="mt-1 font-mono text-[12px] leading-relaxed">{ago(st.last_push_at)}<br />{ago(st.last_pull_at)}</dd></div>
             {schema && !!schema.missing.length && <p className="col-span-full text-[12.5px] text-warn">Missing from the database (not synced until added): {schema.missing.join(', ')}. Use Set up database.</p>}
             {st.last_error && <p className="col-span-full font-mono text-[12px] text-accent">{st.last_error}{st.backoff_until ? ` — retrying after ${st.backoff_until.slice(11, 19)} UTC` : ''}</p>}
@@ -325,7 +325,7 @@ function BackupSection() {
           <div><dt><Kicker>Last copy</Kicker></dt><dd className="mt-1 font-mono text-[12px]">{ago(b.last_sync_at)}</dd></div>
           <div><dt><Kicker>Last full check</Kicker></dt><dd className="mt-1 font-mono text-[12px]">{ago(b.last_full_at)}</dd></div>
           {Object.entries(b.rows).map(([t, n]) => (
-            <div key={t}><dt><Kicker>{t.replace('_', ' ')}</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{n}</dd></div>
+            <div key={t}><dt><Kicker>{t.replace('_', ' ')}</Kicker></dt><dd className="mt-1 text-[22px] font-semibold tabular-nums">{n}</dd></div>
           ))}
         </dl>
         {b.last_error && <p className="mt-4 font-mono text-[12px] text-accent">{b.last_error}</p>}

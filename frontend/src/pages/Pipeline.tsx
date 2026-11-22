@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactDiffViewer from 'react-diff-viewer-continued'
 import { api, type Job, type JobDetail, type TailorReport } from '../api'
-import { Badge, Figure, Kicker, Msg, btn2Cls, btnAccentCls, btnCls, linkBtnCls, pad, useAction, useDark } from '../ui'
+import { Badge, Figure, Kicker, Msg, btn2Cls, btnAccentCls, btnCls, linkBtnCls, toast, useAction, useDark } from '../ui'
 import { TrackingPanel } from '../tracking'
 import { ReadinessBanner } from '../checklist'
 import { AddJob, type Capture } from '../addjob'
@@ -22,23 +22,23 @@ function useDiffStyles() {
     dark,
     styles: {
       variables: {
-        light: {
-          diffViewerBackground: '#f4f2ec', diffViewerColor: '#111', gutterBackground: '#ebe8e0', gutterColor: '#6b6862',
-          addedBackground: '#e3efe6', addedGutterBackground: '#d4e7da', wordAddedBackground: '#b9dcc4', addedColor: '#111',
-          removedBackground: '#fbe4e6', removedGutterBackground: '#f6d3d7', wordRemovedBackground: '#f2b6bd', removedColor: '#111',
-          codeFoldBackground: '#ebe8e0', codeFoldGutterBackground: '#e2dfd6', codeFoldContentColor: '#6b6862', emptyLineBackground: '#f4f2ec',
+        light: {   // monochrome: additions in ink on grey, removals greyed out
+          diffViewerBackground: '#ffffff', diffViewerColor: '#0a0a0a', gutterBackground: '#f5f5f5', gutterColor: '#737373',
+          addedBackground: '#efefef', addedGutterBackground: '#e5e5e5', wordAddedBackground: '#d4d4d4', addedColor: '#0a0a0a',
+          removedBackground: '#fafafa', removedGutterBackground: '#f0f0f0', wordRemovedBackground: '#e8e8e8', removedColor: '#8a8a8a',
+          codeFoldBackground: '#f5f5f5', codeFoldGutterBackground: '#ebebeb', codeFoldContentColor: '#737373', emptyLineBackground: '#ffffff',
         },
         dark: {
-          diffViewerBackground: '#0f0f0e', diffViewerColor: '#f1efe8', gutterBackground: '#1a1a18', gutterColor: '#8f8b82',
-          addedBackground: '#132a1d', addedGutterBackground: '#183424', wordAddedBackground: '#1f4d33', addedColor: '#f1efe8',
-          removedBackground: '#3a1418', removedGutterBackground: '#45181d', wordRemovedBackground: '#6b1f28', removedColor: '#f1efe8',
-          codeFoldBackground: '#1a1a18', codeFoldGutterBackground: '#22221f', codeFoldContentColor: '#8f8b82', emptyLineBackground: '#0f0f0e',
+          diffViewerBackground: '#0a0a0a', diffViewerColor: '#fafafa', gutterBackground: '#161616', gutterColor: '#8a8a8a',
+          addedBackground: '#222222', addedGutterBackground: '#2a2a2a', wordAddedBackground: '#3a3a3a', addedColor: '#fafafa',
+          removedBackground: '#111111', removedGutterBackground: '#161616', wordRemovedBackground: '#1f1f1f', removedColor: '#7a7a7a',
+          codeFoldBackground: '#161616', codeFoldGutterBackground: '#1c1c1c', codeFoldContentColor: '#8a8a8a', emptyLineBackground: '#0a0a0a',
         },
       },
       contentText: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '12px', lineHeight: '1.6', whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const },
       diffContainer: { tableLayout: 'fixed' as const, width: '100%' },
       gutter: { minWidth: '36px', padding: '0 8px', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '11px' },
-      line: { borderBottom: `1px solid ${v('#1f1f1c', '#e2dfd6')}` },
+      line: { borderBottom: `1px solid ${v('#1f1f1f', '#ececec')}` },
     },
   }
 }
@@ -88,7 +88,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
     <article>
       {/* Headline */}
       <Kicker>{d.origin === 'user' ? 'Added by you — ' : ''}{d.closed_at ? <span className="text-warn">Closed {d.closed_at.slice(0, 10)} — </span> : ''}{d.job_type === 'internship' ? 'Internship — ' : ''}{d.company} — {d.source}{d.location ? ` — ${d.location}` : ''}{d.is_remote ? ' — remote' : ''}</Kicker>
-      <h2 className="mt-3 text-[clamp(32px,4.2vw,56px)] font-bold leading-[0.98] tracking-[-0.035em]">{d.title}</h2>
+      <h2 className="mt-3 text-[clamp(32px,4.2vw,56px)] font-semibold leading-[0.98] tracking-[-0.035em]">{d.title}</h2>
       <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
         <Badge s={d.status} />
         {d.score != null && <span className="text-[13px]"><span className="font-semibold tabular-nums">{d.score}</span><span className="text-mute"> / 100 match</span></span>}
@@ -96,7 +96,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
       </div>
 
       {/* Decision bar */}
-      <div className={`mt-8 flex flex-wrap items-center gap-3 border-y py-4 ${awaiting ? 'border-accent' : 'border-hair'}`}>
+      <div className={`mt-8 flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 transition-colors duration-300 ${awaiting ? 'border-ink shadow-[var(--shadow)]' : 'border-hair'}`}>
         {awaiting ? <>
           <span className="mr-auto text-[14px] font-medium">{d.questions.length
             ? `Paused: ${d.questions.length} answer${d.questions.length === 1 ? '' : 's'} needed — answer below, or type them into the open form and approve.`
@@ -152,7 +152,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
           {d.has_pdf
             ? <object data={`/api/jobs/${id}/pdf#toolbar=0&view=FitH`} type="application/pdf" className="h-[560px] w-full border border-hair bg-paper-2" aria-label="Tailored résumé PDF">
                 <div className="flex h-full flex-col items-start justify-end gap-3 p-6">
-                  <span className="text-[48px] font-bold leading-none tracking-[-0.04em]">PDF</span>
+                  <span className="text-[48px] font-semibold leading-none tracking-[-0.04em]">PDF</span>
                   <span className="max-w-[28ch] text-[13px] text-mute">This browser can’t preview PDFs inline.</span>
                   <a className={btn2Cls} href={`/api/jobs/${id}/pdf`} target="_blank" rel="noreferrer">Open the PDF ↗</a>
                 </div>
@@ -169,7 +169,7 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
       )}
 
       {/* Job description, as saved when the posting was found */}
-      <details className="mt-12 border-t border-ink pt-2" open={!d.tailored_tex}>
+      <details className="mt-12 border-t border-hair pt-3" open={!d.tailored_tex}>
         <summary className="flex cursor-pointer flex-wrap items-baseline justify-between gap-3 pb-2">
           <Kicker>Job description</Kicker>
           <span className="font-mono text-[11px] text-mute">
@@ -199,6 +199,13 @@ function Review({ id, onChange }: { id: string; onChange: () => void }) {
   )
 }
 
+/** Is a keystroke meant for a text field rather than a shortcut? */
+export const typing = (e: KeyboardEvent) => {
+  const t = e.target as HTMLElement | null
+  const textInput = t?.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'].includes((t as HTMLInputElement).type)
+  return !!t && (t.isContentEditable || textInput || ['TEXTAREA', 'SELECT'].includes(t.tagName)) || e.metaKey || e.ctrlKey || e.altKey
+}
+
 export default function Pipeline({ capture = null }: { capture?: Capture | null }) {
   const [jobs, setJobs] = useState<Job[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -218,87 +225,125 @@ export default function Pipeline({ capture = null }: { capture?: Capture | null 
   // Auto-open the first job awaiting review
   useEffect(() => { if (!sel && review[0]) setSel(review[0].id) }, [sel, review])
 
+  // A job chosen in the command palette
+  useEffect(() => {
+    const h = (e: Event) => { setFilter('all'); setSel((e as CustomEvent<string>).detail); load() }
+    window.addEventListener('seeko:select-job', h); return () => window.removeEventListener('seeko:select-job', h)
+  }, [load])
+
+  // Keyboard: J/K move · A approve · S skip · O open posting · 1-5 filters
+  const listRef = useRef<HTMLOListElement>(null)
+  useEffect(() => {
+    const act = async (what: 'approve' | 'skip', j: Job) => {
+      if (j.status !== 'needs_review' && what === 'approve') return toast('Only a job waiting in review can be approved.', false)
+      if (what === 'approve' && !confirm(`Submit the application to ${j.company} now?`)) return
+      try { await api(`/pipeline/jobs/${j.id}/${what}`, { method: 'POST' }); toast(what === 'approve' ? `Submitted — ${j.title}` : `Skipped — ${j.title}`); load() }
+      catch (e: any) { toast(e.message, false) }
+    }
+    const h = (e: KeyboardEvent) => {
+      if (typing(e)) return
+      const i = shown.findIndex(j => j.id === sel)
+      const k = e.key.toLowerCase()
+      if (k === 'j' || k === 'k' || e.key === 'ArrowDown' && e.shiftKey || e.key === 'ArrowUp' && e.shiftKey) {
+        if (!shown.length) return
+        const next = shown[Math.max(0, Math.min(shown.length - 1, i + (k === 'j' || e.key === 'ArrowDown' ? 1 : -1)))]
+        setSel(next.id); e.preventDefault()
+        requestAnimationFrame(() => listRef.current?.querySelector(`[data-id="${next.id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
+      } else if ((k === 'a' || k === 's') && i >= 0) { e.preventDefault(); act(k === 'a' ? 'approve' : 'skip', shown[i]) }
+      else if (k === 'o' && i >= 0) window.open(shown[i].url, '_blank', 'noopener')
+      else if (/^[1-5]$/.test(e.key)) setFilter(FILTERS[+e.key - 1].key)
+    }
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h)
+  }, [shown, sel, load])
+
+  const applied = jobs.filter(j => !['not_applied', 'withdrawn'].includes(j.application_status)).length
   return (
     <div>
       <ReadinessBanner />
       {/* Figures */}
-      <div className="grid grid-cols-2 gap-x-6 gap-y-8 md:grid-cols-4">
-        <Figure value={pad(jobs.length)} label={`Found · ${jobs.filter(j => j.job_type === 'internship').length} internships`} />
-        <Figure value={pad(review.length)} label="Awaiting your review" accent={review.length > 0} />
-        <Figure value={pad(jobs.filter(j => !['not_applied', 'withdrawn'].includes(j.application_status)).length)} label="Applied, all time" />
-        <Figure value={<>{st?.applied_today ?? 0}<span className="text-mute">/{st?.daily_cap ?? '—'}</span></>} label="Submitted today / cap" />
+      <div className="stagger grid grid-cols-2 gap-4 md:grid-cols-4">
+        <Figure value={jobs.length} label={`Found · ${jobs.filter(j => j.job_type === 'internship').length} internships`} />
+        <Figure value={review.length} label="Awaiting your review" accent={review.length > 0} />
+        <Figure value={applied} label="Applied, all time" progress={jobs.length ? applied / jobs.length : 0} />
+        <Figure value={<>{st?.applied_today ?? 0}<span className="text-mute">/{st?.daily_cap ?? '—'}</span></>} label="Submitted today / cap"
+          progress={st?.daily_cap ? st.applied_today / st.daily_cap : 0} />
       </div>
 
       {/* Controls */}
-      <div className="mt-10 flex flex-wrap items-center gap-3 border-t-2 border-rule pt-4">
-        <button className={btnCls} disabled={a.busy} onClick={() => a.run(async () => { await api('/pipeline/discover', { method: 'POST' }); setTimeout(load, 1500); return 'Search started — new jobs and internships appear below once it finishes. Progress is under Tracker → Searches.' })}>{st?.searching ? 'Searching…' : 'Run discovery'}</button>
-        <button className={btn2Cls} onClick={() => api(`/pipeline/${st?.paused ? 'resume' : 'pause'}`, { method: 'POST' }).then(load)}>{st?.paused ? 'Resume worker' : 'Pause worker'}</button>
+      <div className="mt-8 flex flex-wrap items-center gap-2.5">
+        <button className={btnCls} disabled={a.busy || st?.searching} onClick={() => a.run(async () => { await api('/pipeline/discover', { method: 'POST' }); setTimeout(load, 1500); return 'Search started — new jobs and internships appear below once it finishes. Progress is under Tracker → Searches.' })}>
+          {st?.searching ? <><i className="h-1.5 w-1.5 rounded-full bg-paper pulse" />Searching…</> : 'Run discovery'}</button>
+        <button className={btn2Cls} onClick={() => api(`/pipeline/${st?.paused ? 'resume' : 'pause'}`, { method: 'POST' }).then(() => { load(); toast(st?.paused ? 'Worker resumed' : 'Worker paused') })}>{st?.paused ? 'Resume worker' : 'Pause worker'}</button>
         {st?.ready_to_submit > 0 && (
-          <button className={btnAccentCls} disabled={a.busy} onClick={() => confirm(`Submit ${st.ready_to_submit} completely filled application(s) now?`) && a.run(async () => {
+          <button className={btnAccentCls + ' anim-pop'} disabled={a.busy} onClick={() => confirm(`Submit ${st.ready_to_submit} completely filled application(s) now?`) && a.run(async () => {
             const r = await api<{ approved: string[] }>('/pipeline/approve-ready', { method: 'POST' }); load()
             return `Submitted ${r.approved.length} application(s).`
           })}>Approve all ready ({st.ready_to_submit})</button>
         )}
-        <span className="ml-auto text-[13px] text-mute">
-          Mode: <span className={`font-semibold ${st && !st.approval_mode ? 'text-accent' : 'text-ink'}`}>{!st ? '—' : st.approval_mode ? 'Approval gate' : 'Full-auto'}</span>
+        <span className="ml-auto rounded-full border border-hair px-3 py-1 text-[12px] text-mute">
+          Mode: <span className={`font-semibold ${st && !st.approval_mode ? 'underline decoration-2 underline-offset-2' : ''} text-ink`}>{!st ? '—' : st.approval_mode ? 'Approval gate' : 'Full-auto'}</span>
         </span>
       </div>
       <Msg m={a.msg} />
       <div className="mt-4"><AddJob key={capture?.url ?? 'none'} capture={capture} onAdded={id => { load(); setSel(id) }} /></div>
 
-      {/* Index + review */}
+      {/* Queue + review */}
       <div className="mt-10 grid grid-cols-12 gap-x-8 gap-y-10">
         <aside className="col-span-12 lg:col-span-4">
-          <div className="flex items-baseline justify-between border-b-2 border-rule pb-2">
-            <h2 className="text-[22px] font-bold tracking-[-0.02em]">Index</h2>
-            <span className="font-mono text-[12px] text-mute">{pad(shown.length)} / {pad(jobs.length)}</span>
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-[20px] font-semibold tracking-[-0.02em]">Queue</h2>
+            <span className="font-mono text-[12px] text-mute">{shown.length} / {jobs.length}</span>
           </div>
-          <div role="tablist" aria-label="Filter jobs" className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
-            {FILTERS.map(f => (
-              <button key={f.key} role="tab" aria-selected={filter === f.key} onClick={() => setFilter(f.key)}
-                className={`border-b-2 pb-1 text-[12px] font-semibold uppercase tracking-[0.1em] ${filter === f.key ? 'border-accent text-ink' : 'border-transparent text-mute hover:text-ink'}`}>
-                {f.label}{f.key === 'review' && review.length > 0 && <span className="ml-1 text-accent">{review.length}</span>}
+          <div role="tablist" aria-label="Filter jobs" className="mt-3 flex flex-wrap gap-1.5">
+            {FILTERS.map((f, i) => (
+              <button key={f.key} role="tab" aria-selected={filter === f.key} onClick={() => setFilter(f.key)} title={`Shortcut: ${i + 1}`}
+                className={`rounded-full border px-3 py-1 text-[12px] font-medium transition-[background-color,color,border-color] duration-200 ${filter === f.key ? 'border-ink bg-ink text-paper' : 'border-hair text-ink-2 hover:border-ink'}`}>
+                {f.label}{f.key === 'review' && review.length > 0 && <span className={`ml-1.5 font-mono ${filter === f.key ? '' : 'font-semibold text-ink'}`}>{review.length}</span>}
               </button>
             ))}
           </div>
 
-          <ol className="mt-4 max-h-[78vh] overflow-auto border-t border-hair">
+          <ol ref={listRef} key={filter} className="stagger mt-4 max-h-[78vh] space-y-2 overflow-auto pr-1">
             {shown.map(j => {
               const on = sel === j.id
               return (
-                <li key={j.id} className="border-b border-hair">
+                <li key={j.id} data-id={j.id}>
                   <button onClick={() => setSel(j.id)} aria-current={on ? 'true' : undefined}
-                    className={`grid w-full grid-cols-[2.25rem_1fr_auto] items-start gap-x-3 py-3.5 pr-2 text-left transition-colors ${on ? 'bg-ink pl-2 text-paper' : 'hover:bg-paper-2'}`}>
-                    <span className={`pt-0.5 font-mono text-[11px] ${on ? 'text-accent' : 'text-mute'}`}>{pad(jobs.indexOf(j) + 1, 3)}</span>
+                    className={`grid w-full grid-cols-[1fr_auto] items-start gap-x-3 rounded-lg border p-3.5 text-left transition-[background-color,color,border-color,transform,box-shadow] duration-200 ease-out ${on ? 'border-ink bg-ink text-paper shadow-[var(--shadow)]' : 'border-hair hover:-translate-y-px hover:border-ink-2 hover:shadow-[var(--shadow)]'}`}>
                     <span className="min-w-0">
                       <span className="block truncate text-[15px] font-semibold leading-tight tracking-[-0.01em]">{j.title}</span>
-                      <span className={`mt-1 block truncate text-[12.5px] ${on ? 'text-paper/70' : 'text-mute'}`}>{j.closed_at && <span className={on ? 'text-paper' : 'text-warn'}>Closed · </span>}{j.job_type === 'internship' && <span className={`font-semibold uppercase tracking-[0.08em] ${on ? 'text-paper' : 'text-ink'}`}>Internship · </span>}{j.company} · {j.source}{j.is_easy_apply ? ' · easy apply' : ''}</span>
-                      <span className="mt-2 block">{on ? <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-paper/80">{j.status.replace('_', ' ')}</span> : <Badge s={j.status} />}</span>
+                      <span className={`mt-1 block truncate text-[12.5px] ${on ? 'text-paper/70' : 'text-mute'}`}>{j.closed_at && <span className="font-semibold">Closed · </span>}{j.job_type === 'internship' && <span className="font-semibold">Internship · </span>}{j.company} · {j.source}{j.origin === 'user' ? ' · added by you' : ''}</span>
+                      <span className="mt-2.5 block">{on ? <span className="rounded-full border border-paper/40 px-2 py-[2px] text-[10.5px] font-semibold uppercase tracking-[0.08em]">{j.status.replace('_', ' ')}</span> : <Badge s={j.status} />}</span>
                     </span>
-                    <span className={`text-right text-[26px] font-bold leading-none tracking-[-0.03em] tabular-nums ${j.score == null ? 'opacity-30' : ''}`}>{j.score ?? '—'}</span>
+                    <span className="text-right">
+                      <span className={`block text-[26px] font-semibold leading-none tracking-[-0.03em] tabular-nums ${j.score == null ? 'opacity-30' : ''}`}>{j.score ?? '—'}</span>
+                      <span className={`mt-1 block text-[10px] font-semibold uppercase tracking-[0.1em] ${on ? 'text-paper/60' : 'text-mute'}`}>{j.score == null ? '' : 'match'}</span>
+                    </span>
                   </button>
                 </li>
               )
             })}
             {loaded && !shown.length && (
-              <li className="py-12">
+              <li className="rounded-lg border border-dashed border-hair p-8">
                 {jobs.length
                   ? <p className="text-[14px] text-mute">Nothing in this view.</p>
                   : <>
-                      <p className="text-[22px] font-bold leading-tight tracking-[-0.02em]">No jobs yet.</p>
-                      <p className="mt-2 max-w-[36ch] text-[14px] leading-relaxed text-mute">Add your model, résumé and a few company career pages under <a className="text-ink underline underline-offset-4" href="#setup">Setup</a>, then run discovery.</p>
+                      <p className="text-[20px] font-semibold leading-tight tracking-[-0.02em]">No jobs yet.</p>
+                      <p className="mt-2 max-w-[36ch] text-[14px] leading-relaxed text-mute">Add your model, résumé and a few company career pages under <a className="text-ink underline underline-offset-4" href="#setup">Setup</a>, then run discovery — or press <kbd>⌘K</kbd> and add a job by link.</p>
                     </>}
               </li>
             )}
+            {!loaded && [0, 1, 2, 3].map(i => <li key={i} className="skeleton h-[92px]" />)}
           </ol>
+          <p className="mt-3 hidden text-[11.5px] text-mute lg:block"><kbd>J</kbd> <kbd>K</kbd> move · <kbd>A</kbd> approve · <kbd>S</kbd> skip · <kbd>O</kbd> open posting · <kbd>?</kbd> all shortcuts</p>
         </aside>
 
         <div className="col-span-12 lg:col-span-8">
-          {sel ? <Review id={sel} onChange={load} /> : (
-            <div className="border-t-2 border-rule pt-6">
+          {sel ? <div key={sel} className="anim-in"><Review id={sel} onChange={load} /></div> : (
+            <div className="rounded-lg border border-dashed border-hair p-8">
               <Kicker>Review</Kicker>
-              <p className="mt-3 max-w-[30ch] text-[clamp(28px,3vw,40px)] font-bold leading-[1.05] tracking-[-0.03em] text-mute">
-                Select a job from the index to read the diff, the PDF and the filled form.
+              <p className="mt-3 max-w-[30ch] text-[clamp(24px,2.6vw,34px)] font-semibold leading-[1.1] tracking-[-0.03em] text-mute">
+                Select a job from the queue to read the diff, the PDF and the filled form.
               </p>
             </div>
           )}

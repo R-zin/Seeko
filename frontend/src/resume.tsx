@@ -49,7 +49,7 @@ function AnalysisPanel({ a }: { a: Analysis | null }) {
       <div className="grid grid-cols-3 gap-4 border-t border-ink pt-3">
         {([['bullet', 'Bullets'], ['skills', 'Skill lines'], ['summary', 'Summary']] as const).map(([k, l]) => (
           <div key={k}>
-            <div className={`text-[34px] font-bold leading-none tracking-[-0.03em] tabular-nums ${a.segments[k] ? '' : 'text-mute'}`}>{a.segments[k]}</div>
+            <div className={`text-[34px] font-semibold leading-none tracking-[-0.03em] tabular-nums ${a.segments[k] ? '' : 'text-mute'}`}>{a.segments[k]}</div>
             <Kicker className="mt-1.5 block">{l}</Kicker>
           </div>
         ))}
@@ -141,7 +141,7 @@ export function ResumeSection() {
           onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) upload(f) }}
           className={`flex cursor-pointer flex-wrap items-baseline justify-between gap-3 border-2 border-dashed px-5 py-6 transition-colors ${drag ? 'border-accent bg-paper-2' : 'border-hair hover:border-ink'}`}>
           <span>
-            <span className="block text-[20px] font-bold tracking-[-0.02em]">{up.busy ? 'Reading…' : 'Drop your résumé here'}</span>
+            <span className="block text-[20px] font-semibold tracking-[-0.02em]">{up.busy ? 'Reading…' : 'Drop your résumé here'}</span>
             <span className="mt-1 block text-[13px] text-mute">.tex · .pdf · .zip — or click to choose. Max 15 MB.</span>
           </span>
           <span className={btn2Cls}>Choose file</span>
@@ -188,7 +188,7 @@ export function ResumeSection() {
               {draft?.has_source_pdf && (
                 <span className="flex gap-3 text-[11px] font-semibold uppercase tracking-[0.1em]">
                   {(['compiled', 'source'] as const).map(p => (
-                    <button key={p} onClick={() => setPreview(p)} className={preview === p ? 'text-ink underline decoration-accent decoration-2 underline-offset-4' : 'text-mute hover:text-ink'}>{p === 'compiled' ? 'Converted' : 'Your PDF'}</button>
+                    <button key={p} onClick={() => setPreview(p)} className={preview === p ? 'text-ink underline decoration-ink decoration-2 underline-offset-4' : 'text-mute hover:text-ink'}>{p === 'compiled' ? 'Converted' : 'Your PDF'}</button>
                   ))}
                 </span>
               )}
