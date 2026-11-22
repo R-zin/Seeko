@@ -7,18 +7,19 @@ The engine is created lazily so importing this module never starts a database. S
 """
 from __future__ import annotations
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)   # naive UTC, as stored
 
-from sqlalchemy import (JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
-                        create_engine, false, func, inspect, select)
+from sqlalchemy import (JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+                        create_engine, event, false, func, inspect, select)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine, make_url
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from config.settings import get_settings, DATA_DIR
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -38,7 +39,8 @@ class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (UniqueConstraint("dedupe_key"), UniqueConstraint("canonical_url"),
                       Index("ix_jobs_status", "status"), Index("ix_jobs_job_type", "job_type"),
-                      Index("ix_jobs_discovered_at", "discovered_at"), Index("ix_jobs_closed_at", "closed_at"))
+                      Index("ix_jobs_discovered_at", "discovered_at"), Index("ix_jobs_closed_at", "closed_at"),
+                      Index("ix_jobs_updated_at", "updated_at"), Index("ix_jobs_notion_dirty", "notion_dirty"))
     id: Mapped[str] = mapped_column(String, primary_key=True)
     source: Mapped[str] = mapped_column(String)
     company: Mapped[str] = mapped_column(String)
@@ -50,7 +52,8 @@ class Job(Base):
     jd_text: Mapped[str] = mapped_column(Text, default="")        # full job description, plain text
     is_easy_apply: Mapped[bool] = mapped_column(Boolean, default=False)
     discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    status: Mapped[str] = mapped_column(String, default="scraped")  # scraped scored tailoring tailored applying needs_review applied failed skipped
+    # scraped scored tailoring tailored applying needs_review applied failed skipped | tracked (added by you as applied)
+    status: Mapped[str] = mapped_column(String, default="scraped")
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     missing_keywords: Mapped[str] = mapped_column(Text, default="[]")
     tailored_summary: Mapped[str] = mapped_column(Text, default="")
@@ -71,6 +74,58 @@ class Job(Base):
     times_seen: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     first_run_id: Mapped[str] = mapped_column(String, default="", server_default="")
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # gone from its board / expired (0003)
+    # Application tracking, edited by the user in the app or in Notion (0004). See APPLICATION_STATUSES.
+    application_status: Mapped[str] = mapped_column(String, default="not_applied", server_default="not_applied")
+    next_step: Mapped[str] = mapped_column(String, default="", server_default="")        # e.g. "Technical interview"
+    next_step_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Any change to the row (ORM and Core updates alike); the backup mirror copies by it.
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=utcnow, onupdate=utcnow)
+    # Notion sync bookkeeping (workers/notion_service.py). Not part of what Notion shows, so changing them never marks dirty.
+    notion_hash: Mapped[str] = mapped_column(String, default="", server_default="")    # hash of the last pushed page
+    notion_base: Mapped[dict | None] = mapped_column(JSONType, nullable=True)          # last synced two-way values
+    notion_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    notion_error: Mapped[str] = mapped_column(Text, default="", server_default="")
+    notion_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    notion_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 0005: where the job came from (search | user: added by link / bookmarklet - never auto-skipped for a low score),
+    # questions its form is waiting on (answer_bank keys), and automatic retries of transient failures.
+    origin: Mapped[str] = mapped_column(String, default="search", server_default="search")
+    waiting_on: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# What the user tracks after (or instead of) Seeko applying. Free text is allowed too (a custom option made in Notion).
+APPLICATION_STATUSES = {"not_applied": "Not applied", "applied": "Applied", "assessment": "Assessment",
+                        "interviewing": "Interviewing", "offer": "Offer", "accepted": "Accepted", "rejected": "Rejected",
+                        "withdrawn": "Withdrawn", "ghosted": "No response"}
+
+
+def application_key(value: str | None) -> str:
+    """'Interviewing' / 'interviewing' -> 'interviewing'; '' -> 'not_applied'; an unknown label is kept as written."""
+    v = (value or "").strip()
+    if not v: return "not_applied"
+    low = v.lower()
+    for key, label in APPLICATION_STATUSES.items():
+        if low in (key, label.lower(), key.replace("_", " ")): return key
+    return v[:60]
+
+
+def update_application(job: "Job", **fields) -> None:
+    """User edits to the tracking fields (from the app or from Notion). Marking a job applied without a date dates it now."""
+    if "application_status" in fields: job.application_status = application_key(fields.pop("application_status"))
+    for k in ("applied_at", "next_step", "next_step_date", "notes"):
+        if k in fields: setattr(job, k, fields[k])
+    if job.application_status == "applied" and job.applied_at is None and "applied_at" not in fields:
+        job.applied_at = utcnow()
+
+
+# Columns shown in Notion: a change to any of them marks the job for a Notion push (see _mark_notion_dirty).
+NOTION_FIELDS = frozenset({"title", "company", "location", "url", "source", "status", "score", "tailored_summary",
+                           "applied_at", "job_type", "employment_type", "is_remote", "posted_at", "valid_through",
+                           "closed_at", "discovered_at", "jd_text", "application_status", "next_step",
+                           "next_step_date", "notes"})
 
 
 class LogEntry(Base):
@@ -94,6 +149,44 @@ class SearchRun(Base):
     spec: Mapped[dict] = mapped_column(JSONType, default=dict)
     stats: Mapped[dict] = mapped_column(JSONType, default=dict)
     error: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=utcnow, onupdate=utcnow)   # 0004
+
+
+class SavedAnswer(Base):
+    """An application-form question and your answer to it (applier/answers.py). `answer` None = waiting for you."""
+    __tablename__ = "answer_bank"
+    key: Mapped[str] = mapped_column(String, primary_key=True)        # normalized question text
+    question: Mapped[str] = mapped_column(Text)                         # as last seen on a form
+    kind: Mapped[str] = mapped_column(String, default="text", server_default="text")
+    options: Mapped[list | None] = mapped_column(JSONType, nullable=True)   # choices on the last form that asked it
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String, default="", server_default="")   # you | learned (typed into a form)
+    times_seen: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=utcnow, onupdate=utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AppState(Base):
+    """Small persistent bookkeeping (e.g. the day the last digest went out)."""
+    __tablename__ = "app_state"
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[dict | list | str | None] = mapped_column(JSONType, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=utcnow, onupdate=utcnow)
+
+
+def get_state(key: str, default=None, session_factory=None):
+    with (session_factory or SessionLocal)() as s:
+        row = s.get(AppState, key)
+        return default if row is None else row.value
+
+
+def set_state(key: str, value, session_factory=None) -> None:
+    with (session_factory or SessionLocal)() as s:
+        row = s.get(AppState, key)
+        if row is None: s.add(AppState(key=key, value=value))
+        else: row.value = value
+        s.commit()
 
 
 class JobSighting(Base):
@@ -118,6 +211,52 @@ class SeenUrl(Base):
     reason: Mapped[str] = mapped_column(String)
     run_id: Mapped[str] = mapped_column(String, default="")
     seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ── Change notifications ─────────────────────────────────────────────────────────────────────────────────────────
+# Any ORM change to a column Notion shows sets notion_dirty; after the commit, listeners (the Notion syncer) are woken.
+# Core UPDATE/INSERT statements bypass these events: code that writes jobs that way sets notion_dirty itself and
+# calls jobs_changed() (see jobsearch/store.py). The syncer also polls, so a change from another process (the CLI)
+# is picked up within its poll interval.
+_change_listeners: list[Callable[[], None]] = []
+
+
+def on_jobs_changed(fn: Callable[[], None]) -> None:
+    if fn not in _change_listeners:
+        _change_listeners.append(fn)
+
+
+def jobs_changed() -> None:
+    for fn in list(_change_listeners):
+        try:
+            fn()
+        except Exception:   # a listener must never break a commit
+            pass
+
+
+@event.listens_for(Session, "before_flush")
+def _mark_notion_dirty(session: Session, _ctx, _instances) -> None:
+    for obj in session.new:
+        if isinstance(obj, Job):
+            session.info["jobs_changed"] = True
+    for obj in session.dirty:
+        if not isinstance(obj, Job):
+            continue
+        state = inspect(obj)
+        if any(state.attrs[k].history.has_changes() for k in NOTION_FIELDS):
+            obj.notion_dirty = True
+            session.info["jobs_changed"] = True
+
+
+@event.listens_for(Session, "after_commit")
+def _after_commit(session: Session) -> None:
+    if session.info.pop("jobs_changed", False):
+        jobs_changed()
+
+
+@event.listens_for(Session, "after_rollback")
+def _after_rollback(session: Session) -> None:
+    session.info.pop("jobs_changed", None)
 
 
 # ── Engine ──────────────────────────────────────────────────────────────────────────────────────────────────────

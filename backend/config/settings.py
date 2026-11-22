@@ -24,6 +24,16 @@ class Settings(BaseSettings):
 
     notion_token: str = ""
     notion_database_id: str = ""
+    notion_pull_interval_s: int = 60    # read tracking edits back from Notion this often; 0 = one-way (push only)
+
+    # Notifications (notify.py): Slack / Discord incoming webhook, ntfy topic URL, or any URL taking JSON.
+    notify_webhook_url: str = ""
+    notify_events: list[str] = Field(default_factory=lambda: ["needs_review", "applied", "failed", "new_jobs", "digest"])
+    digest_hour: int = 8                # local hour for the daily follow-up digest; -1 = no digest
+    followup_after_days: int = 7        # an application with no news after this many days is due a follow-up
+    auto_ghost_days: int = 0            # mark "No response" after this many days without news; 0 = never
+    auto_retry: int = 3                 # retries of a job that failed for a transient reason (timeout, rate limit...)
+    app_url: str = "http://127.0.0.1:5173"   # where you open Seeko (links in notifications); 8000 when serving the build
 
     approval_mode: bool = True          # approval gate by default
     daily_apply_cap: int = 10
@@ -33,6 +43,10 @@ class Settings(BaseSettings):
     # Any SQLAlchemy URL (postgresql://… recommended). Empty = embedded PostgreSQL in data/postgres.
     # Deployment config: read from env/.env only, never from the UI overrides file.
     database_url: str = ""
+    # Backup PostgreSQL server that mirrors every Seeko table (backup.py). Empty = off; "embedded" = a second local
+    # server in data/postgres-backup. Env-only, like database_url (the URL holds a password).
+    backup_database_url: str = ""
+    backup_interval_s: int = 30         # incremental copy this often; a full check runs at start and every 6 h
 
     # Job search (LangGraph). Defaults are deliberately polite: few pages, jittered delays, bounded detail visits.
     search_max_queries: int = 6         # per board, per run (titles x locations x job types)
@@ -59,7 +73,7 @@ class Settings(BaseSettings):
 
 
 OVERRIDES = DATA_DIR / "settings.json"   # UI edits persist here (git-ignored; holds secrets, chmod 600)
-ENV_ONLY = {"database_url"}               # older settings.json files pinned the SQLite path; ignore it
+ENV_ONLY = {"database_url", "backup_database_url"}   # deployment config (and old files pinned the SQLite path)
 
 
 def _load() -> Settings:

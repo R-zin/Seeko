@@ -133,7 +133,29 @@ async def run_search(spec: SearchSpec | None = None, *, run_id: str | None = Non
         run_id = run_id or uuid.uuid4().hex[:12]
         spec = spec or SearchSpec.from_profile()
         inputs = {"run_id": run_id, "spec": spec.model_dump(mode="json"), "trigger": trigger}
-        return await _guarded(_invoke(inputs, run_id, d), run_id)
+        res = await _guarded(_invoke(inputs, run_id, d), run_id)
+    announce(res, d.store._sf)
+    return res
+
+
+def announce(res: dict, session_factory=None) -> None:
+    """Notify about what a search found (best ones first). Never raises."""
+    ids = res.get("new_job_ids") or []
+    st = db.get_settings()
+    if not ids or not st.notify_webhook_url.strip() or "new_jobs" not in st.notify_events: return
+    try:
+        import notify
+        from sqlalchemy import select
+        from db import Job
+        with (session_factory or db.SessionLocal)() as s:
+            rows = s.execute(select(Job.title, Job.company, Job.job_type).where(Job.id.in_(ids[:200]))
+                             .order_by(Job.relevance.desc().nulls_last()).limit(5)).all()
+        lines = [f"• {t} — {c}{' (internship)' if jt == 'internship' else ''}" for t, c, jt in rows]
+        more = f"\n…and {len(ids) - len(lines)} more" if len(ids) > len(lines) else ""
+        notify.emit("new_jobs", f"{len(ids)} new job{'s' if len(ids) != 1 else ''} found", "\n".join(lines) + more,
+                    notify.link("tracker"), {"run_id": res.get("run_id"), "count": len(ids)})
+    except Exception:
+        pass
 
 
 async def _guarded(coro, run_id: str) -> dict:

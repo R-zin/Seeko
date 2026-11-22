@@ -24,13 +24,18 @@ candidate profile and resume. Rules:
 - Open-ended questions ("why this company", project descriptions): 2-4 truthful sentences grounded in the resume and the job description.
 - Checkbox with a non-empty `group` is one option of a multi-choice question named by `group` (e.g. pronouns): return true ONLY if the profile or resume explicitly states that choice, otherwise null.
 - Legal/EEO/demographic questions: choose a 'decline to answer' style option if available, else null.
+- SAVED ANSWERS are the candidate's own answers to questions on earlier forms: they are facts about the candidate. Use
+  one when a field asks the same thing in other words (e.g. notice period, relocation, work authorization), adapting
+  it to the field's options; never stretch it to a different question.
 Return JSON {"answers": [{"id": "...", "value": ..., "confident": true|false}]}."""
 
 
 async def map_fields(fields: list[Field], profile: CandidateProfile, resume_tex: str, job_title: str,
-                     company: str, jd_text: str, llm: LLMClient | None = None) -> FieldMap:
-    llm = llm or LLMClient.from_settings(task="applier")
+                     company: str, jd_text: str, llm: LLMClient | None = None, facts: list[dict] | None = None) -> FieldMap:
     fs = [f.model_dump() for f in fields if f.kind != "file"]
+    if not fs: return FieldMap(answers=[])          # everything was answered from your saved answers
+    llm = llm or LLMClient.from_settings(task="applier")
+    saved = "".join(f"\n- Q: {x['question'][:300]}\n  A: {str(x['answer'])[:500]}" for x in (facts or []))
     user = (f"JOB: {job_title} at {company}\nJD (truncated):\n{jd_text[:3000]}\n\nPROFILE:\n{profile.model_dump_json()}\n\n"
-            f"RESUME:\n{plain_text(resume_tex)[:6000]}\n\nFIELDS:\n{fs}")
+            f"RESUME:\n{plain_text(resume_tex)[:6000]}\n\n" + (f"SAVED ANSWERS:{saved}\n\n" if saved else "") + f"FIELDS:\n{fs}")
     return await complete_json(llm, FieldMap, [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}])

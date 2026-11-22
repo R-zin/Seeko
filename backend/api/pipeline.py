@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/pipeline")
 @router.get("/status")
 def status():
     return {"paused": P.state["paused"], "running": P.state["running"], "searching": search.is_running(), "applied_today": applied_today(),
+            "ready_to_submit": len(P.ready_ids()),
             "daily_cap": get_settings().daily_apply_cap, "llm_configured": P.llm_configured(), "approval_mode": get_settings().approval_mode}
 
 
@@ -40,6 +41,20 @@ async def approve(job_id: str):
 
 @router.post("/jobs/{job_id}/skip")
 async def skip(job_id: str): await P.skip(job_id); return {"ok": True}
+
+
+@router.post("/approve-ready")
+async def approve_ready():
+    """Submit every application whose form is completely filled and waiting for your approval."""
+    done = await P.approve_ready()
+    return {"ok": True, "approved": done}
+
+
+@router.post("/jobs/{job_id}/refill")
+async def refill(job_id: str):
+    """Fill a paused job's form again (e.g. after answering its questions)."""
+    if not await P.refill(job_id): raise HTTPException(409, "only jobs waiting in review can be filled again")
+    return {"ok": True}
 
 
 @router.post("/jobs/{job_id}/retry")

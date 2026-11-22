@@ -9,6 +9,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Iterable
 from sqlalchemy import Select, func, literal_column, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 import db
 from db import FTS_DOC, Job, JobSighting, SearchRun, SeenUrl, utcnow
@@ -47,7 +48,8 @@ class Store:
         with self._sf() as s:
             stmt = _insert(s, SearchRun).values(id=run_id, started_at=utcnow(), status="running", trigger=trigger,
                                                 spec=spec, stats={}, error="")
-            s.execute(stmt.on_conflict_do_update(index_elements=["id"], set_={"status": "running", "error": ""}))
+            s.execute(stmt.on_conflict_do_update(index_elements=["id"], set_={"status": "running", "error": "",
+                                                                                "updated_at": utcnow()}))
             s.commit()
 
     def finish_run(self, run_id: str, status: str, stats: dict | None = None, error: str = "") -> None:
@@ -113,6 +115,11 @@ class Store:
                     out[dk] = jid
         return out
 
+    def add_job(self, p: dict, origin: str = "user", applied: bool = False) -> tuple[str, bool]:
+        """Store one job added by hand (jobsearch/intake.py). Returns (job id, created). A job already stored (same
+        link, or same company + title) is returned as it is; with `applied` it is marked applied if it was not yet."""
+        return _add_job(self, p, origin, applied)
+
     def recently_rejected(self, canonical_urls: list[str], days: int) -> set[str]:
         if days <= 0:
             return set()
@@ -168,30 +175,63 @@ class Store:
                     s.execute(update(Job).where(Job.id == job_id).values(last_seen_at=now, times_seen=Job.times_seen + 1))
                     bumped += 1
                     reopened += s.execute(update(Job).where(Job.id == job_id, Job.closed_at.is_not(None))
-                                          .values(closed_at=None)).rowcount or 0
+                                          .values(closed_at=None, notion_dirty=True)).rowcount or 0
             closed = 0
             for board in listings:     # the API returned the company's whole board: what is missing has closed
                 closed += s.execute(update(Job).where(
                     Job.source == board["source"], Job.company == board["company"], Job.closed_at.is_(None),
-                    Job.canonical_url.not_in(board["urls"])).values(closed_at=now)).rowcount or 0
+                    Job.canonical_url.not_in(board["urls"])).values(closed_at=now, notion_dirty=True)).rowcount or 0
             closed += s.execute(update(Job).where(Job.closed_at.is_(None), Job.valid_through.is_not(None),
-                                                  Job.valid_through < now).values(closed_at=now)).rowcount or 0
+                                                  Job.valid_through < now).values(closed_at=now, notion_dirty=True)).rowcount or 0
             for r in rejected:
                 stmt = _insert(s, SeenUrl).values(canonical_url=canonical_url(r["url"]), source=r["source"],
                                                   title=(r.get("title") or "")[:300], reason=r["reason"], run_id=run_id, seen_at=now)
                 s.execute(stmt.on_conflict_do_update(index_elements=["canonical_url"],
                                                      set_={"reason": r["reason"], "run_id": run_id, "seen_at": now,
                                                            "title": (r.get("title") or "")[:300]}))
+        if new_ids or closed or reopened:
+            db.jobs_changed()   # Core statements skip the ORM events: wake the Notion syncer ourselves
         return {"new_job_ids": list(dict.fromkeys(new_ids)), "known_bumped": bumped, "closed": closed, "reopened": reopened}
 
 
+def _add_job(store: "Store", p: dict, origin: str, applied: bool) -> tuple[str, bool]:
+    cu = p.get("canonical_url") or canonical_url(p["url"])
+    dk = dedupe_key(p.get("company", ""), p["title"])
+    now = utcnow()
+    with store._sf() as s:
+        existing = s.scalar(select(Job).where((Job.canonical_url == cu) | (Job.dedupe_key == dk)).limit(1))
+        if existing is not None:
+            if applied and existing.application_status == "not_applied":
+                db.update_application(existing, application_status="applied")
+                if existing.status in ("scraped", "scored"): existing.status = "tracked"
+                s.commit()
+            return existing.id, False
+        job = Job(id=job_id_for(cu), source=p["source"], company=(p.get("company") or "")[:300], title=p["title"][:300],
+                  location=(p.get("location") or "")[:300], url=p.get("url") or "", canonical_url=cu, dedupe_key=dk,
+                  jd_text=p.get("jd_text") or "", discovered_at=now, last_seen_at=now, origin=origin,
+                  status="tracked" if applied else "scraped", job_type=p.get("job_type", "job"),
+                  employment_type=(p.get("employment_type") or "")[:100], is_remote=bool(p.get("is_remote")),
+                  posted_at=parse_date(p.get("posted_at")), valid_through=parse_date(p.get("valid_through")),
+                  jd_source=p.get("jd_source", ""), relevance=p.get("relevance"), times_seen=1)
+        if applied: db.update_application(job, application_status="applied")
+        s.add(job)
+        try:
+            s.commit()
+        except IntegrityError:   # added at the same moment by a search: return that one
+            s.rollback()
+            return s.scalar(select(Job.id).where((Job.canonical_url == cu) | (Job.dedupe_key == dk)).limit(1)), False
+        return job.id, True
+
+
 def jobs_query(session: Session, *, status: str | None = None, source: str | None = None, job_type: str | None = None,
-               state: str | None = None, q: str | None = None, since: datetime | None = None, limit: int | None = 500) -> Select:
+               state: str | None = None, q: str | None = None, since: datetime | None = None, limit: int | None = 500,
+               application_status: str | None = None) -> Select:
     """The one query behind the jobs list, export and CLI. `q` is full-text over title, company and the saved
     description (PostgreSQL: websearch syntax - "exact phrase", -exclude, OR - ranked; SQLite: substring)."""
     stmt = select(Job)
     if status: stmt = stmt.where(Job.status == status)
     if source: stmt = stmt.where(Job.source == source)
+    if application_status: stmt = stmt.where(Job.application_status == application_status)
     if job_type: stmt = stmt.where(Job.job_type == job_type)
     if state == "open": stmt = stmt.where(Job.closed_at.is_(None))
     elif state == "closed": stmt = stmt.where(Job.closed_at.is_not(None))

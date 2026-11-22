@@ -18,7 +18,14 @@ JS = """(start) => {
     const box = e.closest('fieldset, .application-question, li, .field, [role=group]'); if (!box) return '';
     if (box.querySelectorAll('input[type=checkbox]').length < 2) return '';
     const lg = box.querySelector('legend, .application-label, label:not(:has(input))');
-    return (lg ? lg.innerText : box.innerText.split('\\n')[0]).replace(/[\u2731*]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    return (lg ? lg.innerText : box.innerText.split('\\n')[0]).replace(/[\u2731*]/g, '').replace(/\\s+/g, ' ').trim().slice(0, 200);
+  };
+  const cur = (e, t) => {   // what the control holds now, as a person reads it
+    if (e.tagName === 'SELECT') return e.selectedIndex >= 0 && e.value !== '' ? e.options[e.selectedIndex].text.trim() : '';
+    if (t === 'radio') { const c = [...document.querySelectorAll('input[type=radio][name="' + e.name + '"]')].find(r => r.checked);
+      return c ? ((c.labels && c.labels[0] ? c.labels[0].innerText : c.value) || '').trim() : ''; }
+    if (t === 'checkbox') return e.checked ? 'yes' : '';
+    return e.value || '';
   };
   const out = []; let n = start; const seenGroups = new Set();
   document.querySelectorAll('input, select, textarea').forEach(e => {
@@ -30,8 +37,8 @@ JS = """(start) => {
     if (e.tagName === 'SELECT') options = [...e.options].filter(o => o.value !== '').map(o => o.text.trim());
     if (t === 'radio') options = [...document.querySelectorAll('input[type=radio][name="' + e.name + '"]')].map(r => (r.labels && r.labels[0] ? r.labels[0].innerText : r.value).trim());
     out.push({ id, kind: e.tagName === 'SELECT' ? 'select' : e.tagName === 'TEXTAREA' ? 'textarea' : t,
-      label: label(e).replace(/[\u2731*\u2217]/g, '').replace(/\s+/g, ' ').trim().slice(0, 300), name: e.name || '', dom_id: e.id || '', required: e.required || e.getAttribute('aria-required') === 'true',
-      group: groupOf(e), options, current: (e.value || '').slice(0, 100), placeholder: e.placeholder || '' });
+      label: label(e).replace(/[\u2731*\u2217]/g, '').replace(/\\s+/g, ' ').trim().slice(0, 300), name: e.name || '', dom_id: e.id || '', required: e.required || e.getAttribute('aria-required') === 'true',
+      group: groupOf(e), options, current: cur(e, t).slice(0, 2000), placeholder: e.placeholder || '' });
   });
   return out; }"""
 
