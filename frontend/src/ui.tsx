@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 /* ── Primitives for the monochrome system (prototyped in Stitch) ──────────
    White / near-black only, 1px hairlines, 6px radius, short eased motion. */
@@ -28,19 +28,25 @@ export const Kicker = ({ children, className = '' }: { children: ReactNode; clas
   <span className={`text-[11px] font-semibold uppercase tracking-[0.12em] text-mute ${className}`}>{children}</span>
 )
 
-/** Numbered section: number + title + note on the left, content on the right. Fades in on mount. */
+/** Sections render full width: number + title (+ aside on the right), then the content. Pages that want each section's
+ *  content on a grey panel (Setup) wrap themselves in <SectionPanels>. Each section gets id="s-<n>" for in-page links. */
+const PanelCtx = createContext(false)
+export const SectionPanels = ({ children }: { children: ReactNode }) => <PanelCtx.Provider value={true}>{children}</PanelCtx.Provider>
+
 export function Section({ n, title, note, children, aside }: { n: string; title: string; note?: ReactNode; children: ReactNode; aside?: ReactNode }) {
+  const panel = useContext(PanelCtx)
   return (
-    <section className="anim-in grid grid-cols-12 gap-x-6 gap-y-6 border-t border-hair pt-8 pb-14">
-      <header className="col-span-12 lg:col-span-3">
-        <div className="flex items-baseline gap-3 lg:block">
-          <span className="font-mono text-[11px] text-mute">{n}</span>
-          <h2 className="text-[22px] font-semibold leading-[1.1] tracking-[-0.02em] lg:mt-1.5">{title}</h2>
+    <section id={`s-${n}`} className="anim-in scroll-mt-24 pb-14">
+      <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 pb-4">
+        <div className="min-w-0">
+          <h2 className="flex items-baseline gap-2.5 text-[22px] font-semibold leading-[1.15] tracking-[-0.02em]">
+            <span className="font-mono text-[11px] font-normal text-mute">{n}</span>{title}
+          </h2>
+          {note && <p className="mt-1.5 max-w-[72ch] text-[13.5px] leading-relaxed text-mute">{note}</p>}
         </div>
-        {note && <p className="mt-2.5 max-w-[34ch] text-[13.5px] leading-relaxed text-mute">{note}</p>}
-        {aside}
+        {aside && <div className="shrink-0 text-[13px]">{aside}</div>}
       </header>
-      <div className="col-span-12 lg:col-span-9">{children}</div>
+      <div className={panel ? 'rounded-xl border border-hair bg-paper-2 p-4 sm:p-6' : ''}>{children}</div>
     </section>
   )
 }

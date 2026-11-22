@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type BackupStatus, type NotionStatus } from '../api'
 import { ResumeSection } from '../resume'
-import { Checklist } from '../checklist'
+import { Checklist, SetupNav } from '../checklist'
 import { AnswersSection } from '../answers'
-import { Check, Field, Kicker, Msg, Section, areaCls, btn2Cls, btnCls, inputCls, linkBtnCls, useAction } from '../ui'
+import { Check, Field, Kicker, Msg, Section, SectionPanels, areaCls, btn2Cls, btnCls, inputCls, linkBtnCls, useAction } from '../ui'
 
 /** Comma-separated list input that keeps the raw text while typing (commas would otherwise vanish). */
 function ListInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -253,7 +253,7 @@ function NotionSection() {
 
   return (
     <Section n="07" title="Notion" note={<>Every job, its status and your application tracking, kept in your Notion database through Notion’s MCP server. Changes reach Notion within seconds; edits to the tracking columns in Notion come back.</>}
-      aside={<p className="mt-4 max-w-[34ch] font-mono text-[11px] leading-relaxed text-mute">{PROPS.join(' · ')}<br /><span className="text-ink-2">Page body: the full job description.</span></p>}>
+      >
       {!s ? <Skeleton /> : <>
         <ol className="mb-6 list-decimal space-y-1 pl-5 text-[13.5px] leading-relaxed text-ink-2">
           <li>Create an internal integration at notion.so/profile/integrations and copy its token.</li>
@@ -286,6 +286,7 @@ function NotionSection() {
           })}>Pull edits now</button>
         </div>
         <Msg m={n.msg} />
+        <p className="mt-8 border-t border-hair pt-4 font-mono text-[11px] leading-relaxed text-mute">{PROPS.join(' · ')}<br /><span className="text-ink-2">Page body: the full job description.</span></p>
         {st?.configured && (
           <dl className="mt-8 grid grid-cols-2 gap-x-8 gap-y-4 border-t border-hair pt-4 text-[13px] sm:grid-cols-4">
             <div><dt><Kicker>Pages</Kicker></dt><dd className="mt-1 text-[22px] font-semibold tabular-nums">{st.synced}</dd></div>
@@ -400,5 +401,12 @@ function NotifySection() {
 }
 
 export default function Setup() {
-  return <div><Checklist /><ModelSection /><ResumeSection /><ProfileSections /><AnswersSection /><SourcesSection /><NotionSection /><BackupSection /><NotifySection /></div>
+  return (
+    <div className="grid grid-cols-12 gap-x-10">
+      <aside className="col-span-12 hidden lg:col-span-3 lg:block"><SetupNav /></aside>
+      <div className="col-span-12 lg:col-span-9">
+        <SectionPanels><Checklist /><ModelSection /><ResumeSection /><ProfileSections /><AnswersSection /><SourcesSection /><NotionSection /><BackupSection /><NotifySection /></SectionPanels>
+      </div>
+    </div>
+  )
 }
