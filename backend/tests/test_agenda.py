@@ -62,7 +62,7 @@ def test_agenda_lists_what_needs_you(jobs):
 
 
 def test_auto_no_response_skips_jobs_with_plans(jobs):
-    assert agenda.auto_ghost(9, jobs, now=NOW) == 1
+    assert agenda.auto_ghost(9, jobs, now=NOW, today=TODAY) == 1
     with jobs() as s:
         assert s.get(Job, "stale").application_status == "ghosted" and s.get(Job, "stale").notion_dirty
         assert s.get(Job, "planned").application_status == "applied" and s.get(Job, "recent").application_status == "applied"
