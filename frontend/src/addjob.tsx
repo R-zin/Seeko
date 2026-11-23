@@ -23,7 +23,7 @@ function Bookmarklet() {
   }, [])
   return (
     <p className="text-[12.5px] leading-relaxed text-mute">
-      <a ref={ref} onClick={e => e.preventDefault()} className="mr-2 inline-flex items-center gap-1 border border-ink px-2 py-0.5 font-semibold text-ink no-underline" title="Drag me to your bookmarks bar">＋ Seeko</a>
+      <a ref={ref} onClick={e => e.preventDefault()} className="mr-2 inline-flex items-center gap-1 rounded-md border border-ink px-2 py-0.5 font-semibold text-ink no-underline" title="Drag me to your bookmarks bar">＋ Seeko</a>
       Drag this to your bookmarks bar. On any job page — even ones you are signed in to, like LinkedIn — click it to send
       that posting here. Seeko only reads what your tab shows; select the description first if the page is busy.
     </p>
@@ -54,10 +54,15 @@ export function AddJob({ capture, onAdded }: { capture: Capture | null; onAdded:
       : `Already known: “${r.job.title}” at ${r.job.company}.`
   })
   useEffect(() => { if (capture) preview() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  const box = useRef<HTMLElement>(null)
+  useEffect(() => {   // "Add a job by link…" in the command palette
+    const h = () => { setOpen(true); setTimeout(() => { box.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); box.current?.querySelector('input')?.focus() }, 60) }
+    window.addEventListener('seeko:add-job', h); return () => window.removeEventListener('seeko:add-job', h)
+  }, [])
 
-  if (!open) return <button className={linkBtnCls} onClick={() => setOpen(true)}>＋ Add a job by link</button>
+  if (!open) return <button className={btn2Cls} onClick={() => setOpen(true)}>＋ Add a job by link</button>
   return (
-    <section aria-label="Add a job" className="mt-6 border border-ink p-5">
+    <section ref={box} aria-label="Add a job" className="anim-pop mt-6 rounded-lg border border-ink p-5 shadow-[var(--shadow)]">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <Kicker>Add a job you found</Kicker>
         <button className={linkBtnCls} onClick={() => { setOpen(false); setPv(null) }}>Close</button>
@@ -90,7 +95,7 @@ export function AddJob({ capture, onAdded }: { capture: Capture | null; onAdded:
       </div>
       {pv && (
         <div className="mt-5 border-l-2 border-ink pl-4">
-          <p className="text-[19px] font-bold leading-tight tracking-[-0.01em]">{pv.title}</p>
+          <p className="text-[19px] font-semibold leading-tight tracking-[-0.01em]">{pv.title}</p>
           <p className="mt-1 text-[13px] text-mute">{pv.company} · {pv.source}{pv.location ? ` · ${pv.location}` : ''}{pv.is_remote ? ' · remote' : ''}{pv.job_type === 'internship' ? ' · internship' : ''}{pv.valid_through ? ` · apply by ${pv.valid_through.slice(0, 10)}` : ''}</p>
           <p className="mt-2 line-clamp-4 max-w-[80ch] whitespace-pre-line text-[13px] leading-relaxed text-ink-2">{pv.jd_text || 'No description found.'}</p>
           <p className="mt-1 font-mono text-[11px] text-mute">{pv.jd_chars} characters of description · read from {pv.jd_source}</p>

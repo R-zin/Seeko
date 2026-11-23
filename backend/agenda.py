@@ -81,13 +81,13 @@ def digest_text(a: dict) -> str:
     return "\n".join(out)
 
 
-def auto_ghost(days: int, session_factory=None, now: datetime | None = None) -> int:
+def auto_ghost(days: int, session_factory=None, now: datetime | None = None, today: date | None = None) -> int:
     """Mark applications with no news `days` after applying as "No response". Returns how many."""
     now = now or utcnow()
     with _sf(session_factory)() as s:
         jobs = s.scalars(select(Job).where(Job.application_status == "applied", Job.applied_at.is_not(None),
                                            Job.applied_at <= now - timedelta(days=days))).all()
-        today = datetime.now().date()
+        today = today or datetime.now().date()
         n = 0
         for j in jobs:
             if j.next_step_date and j.next_step_date >= today: continue     # something is still planned
@@ -104,7 +104,7 @@ async def tick(session_factory=None, now_local: datetime | None = None) -> dict:
     today = now_local.date().isoformat()
     done = {}
     if st.auto_ghost_days > 0 and get_state("auto_ghost_on", session_factory=session_factory) != today:
-        n = auto_ghost(st.auto_ghost_days, session_factory)
+        n = auto_ghost(st.auto_ghost_days, session_factory, today=now_local.date())
         set_state("auto_ghost_on", today, session_factory=session_factory)
         if n: log(f"marked {n} application(s) with no answer after {st.auto_ghost_days} days as “No response”")
         done["ghosted"] = n

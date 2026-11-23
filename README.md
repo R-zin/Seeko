@@ -93,6 +93,16 @@ LangGraph Studio: `pip install "langgraph-cli[inmem]"` and `langgraph dev` in `b
   applied to, and what is waiting for you. The same list is the daily digest at `DIGEST_HOUR` (local). Optionally
   `AUTO_GHOST_DAYS` marks applications with no answer that long as "No response" (synced to Notion).
 
+## Interface
+A minimal black & white UI (prototyped in Google Stitch): white / near-black only, hairline borders, light and dark themes
+(follows the system; `T` or the top-right button switches), short eased animations that switch off under
+"reduce motion".
+- **⌘K / Ctrl+K** (or `/`) opens the command palette: full-text job search plus every action — run discovery, pause/resume,
+  approve all ready, add a job by link, send the digest, pull Notion edits, back up now, switch theme.
+- **Keyboard:** `J`/`K` next/previous job, `A` approve, `S` skip, `O` open the posting, `1`–`5` queue filters, `G P` / `G S` /
+  `G T` switch tabs, `?` lists everything.
+- **Bulk edits** in Tracker → Register: tick jobs, then set their application status, skip them or retry failed ones at once.
+
 ## Notion tracker
 Seeko keeps a Notion database in step with its own, through Notion's MCP server (`npx -y @notionhq/notion-mcp-server@2`,
 Notion API 2025-09-03).

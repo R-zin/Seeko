@@ -38,7 +38,7 @@ export function JobQuestions({ questions, onSaved }: { questions: SavedQ[]; onSa
     return msg
   })
   return (
-    <section className="mt-8 border border-accent p-5" aria-label="Questions this form needs">
+    <section className="anim-pop mt-8 rounded-lg border border-ink p-5 shadow-[var(--shadow)]" aria-label="Questions this form needs">
       <Kicker className="text-accent">This form needs {questions.length} answer{questions.length === 1 ? '' : 's'} from you</Kicker>
       <p className="mt-1 text-[12.5px] text-mute">Saved answers are reused on every future form that asks the same thing.</p>
       <div className="mt-4 space-y-5">

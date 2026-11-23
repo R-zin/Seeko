@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type BackupStatus, type NotionStatus } from '../api'
 import { ResumeSection } from '../resume'
-import { Checklist } from '../checklist'
+import { Checklist, SetupNav } from '../checklist'
 import { AnswersSection } from '../answers'
-import { Check, Field, Kicker, Msg, Section, areaCls, btn2Cls, btnCls, inputCls, linkBtnCls, useAction } from '../ui'
+import { Check, Field, Kicker, Msg, Section, SectionPanels, areaCls, btn2Cls, btnCls, inputCls, linkBtnCls, useAction } from '../ui'
 
 /** Comma-separated list input that keeps the raw text while typing (commas would otherwise vanish). */
 function ListInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -122,7 +122,7 @@ function ProfileSections() {
           <Field label="Minimum match score" hint="Jobs scoring below this are skipped.">
             <div className="flex items-center gap-4">
               <input type="range" min={0} max={100} value={p.search.min_match_score} onChange={e => up('search', 'min_match_score', +e.target.value)} className="w-full accent-[var(--ink)]" />
-              <span className="w-12 text-right text-[28px] font-bold leading-none tracking-[-0.03em] tabular-nums">{p.search.min_match_score}</span>
+              <span className="w-12 text-right text-[28px] font-semibold leading-none tracking-[-0.03em] tabular-nums">{p.search.min_match_score}</span>
             </div>
           </Field>
           <div className="flex items-end pb-2"><Check checked={p.search.remote_only} onChange={v => up('search', 'remote_only', v)}>Remote only</Check></div>
@@ -253,7 +253,7 @@ function NotionSection() {
 
   return (
     <Section n="07" title="Notion" note={<>Every job, its status and your application tracking, kept in your Notion database through Notion’s MCP server. Changes reach Notion within seconds; edits to the tracking columns in Notion come back.</>}
-      aside={<p className="mt-4 max-w-[34ch] font-mono text-[11px] leading-relaxed text-mute">{PROPS.join(' · ')}<br /><span className="text-ink-2">Page body: the full job description.</span></p>}>
+      >
       {!s ? <Skeleton /> : <>
         <ol className="mb-6 list-decimal space-y-1 pl-5 text-[13.5px] leading-relaxed text-ink-2">
           <li>Create an internal integration at notion.so/profile/integrations and copy its token.</li>
@@ -286,11 +286,12 @@ function NotionSection() {
           })}>Pull edits now</button>
         </div>
         <Msg m={n.msg} />
+        <p className="mt-8 border-t border-hair pt-4 font-mono text-[11px] leading-relaxed text-mute">{PROPS.join(' · ')}<br /><span className="text-ink-2">Page body: the full job description.</span></p>
         {st?.configured && (
           <dl className="mt-8 grid grid-cols-2 gap-x-8 gap-y-4 border-t border-hair pt-4 text-[13px] sm:grid-cols-4">
-            <div><dt><Kicker>Pages</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{st.synced}</dd></div>
-            <div><dt><Kicker>Waiting</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{st.pending}</dd></div>
-            <div><dt><Kicker>Errors</Kicker></dt><dd className={`mt-1 text-[22px] font-bold tabular-nums ${st.errors ? 'text-accent' : ''}`}>{st.errors}</dd></div>
+            <div><dt><Kicker>Pages</Kicker></dt><dd className="mt-1 text-[22px] font-semibold tabular-nums">{st.synced}</dd></div>
+            <div><dt><Kicker>Waiting</Kicker></dt><dd className="mt-1 text-[22px] font-semibold tabular-nums">{st.pending}</dd></div>
+            <div><dt><Kicker>Errors</Kicker></dt><dd className={`mt-1 text-[22px] font-semibold tabular-nums ${st.errors ? 'text-accent' : ''}`}>{st.errors}</dd></div>
             <div><dt><Kicker>Last push / pull</Kicker></dt><dd className="mt-1 font-mono text-[12px] leading-relaxed">{ago(st.last_push_at)}<br />{ago(st.last_pull_at)}</dd></div>
             {schema && !!schema.missing.length && <p className="col-span-full text-[12.5px] text-warn">Missing from the database (not synced until added): {schema.missing.join(', ')}. Use Set up database.</p>}
             {st.last_error && <p className="col-span-full font-mono text-[12px] text-accent">{st.last_error}{st.backoff_until ? ` — retrying after ${st.backoff_until.slice(11, 19)} UTC` : ''}</p>}
@@ -325,7 +326,7 @@ function BackupSection() {
           <div><dt><Kicker>Last copy</Kicker></dt><dd className="mt-1 font-mono text-[12px]">{ago(b.last_sync_at)}</dd></div>
           <div><dt><Kicker>Last full check</Kicker></dt><dd className="mt-1 font-mono text-[12px]">{ago(b.last_full_at)}</dd></div>
           {Object.entries(b.rows).map(([t, n]) => (
-            <div key={t}><dt><Kicker>{t.replace('_', ' ')}</Kicker></dt><dd className="mt-1 text-[22px] font-bold tabular-nums">{n}</dd></div>
+            <div key={t}><dt><Kicker>{t.replace('_', ' ')}</Kicker></dt><dd className="mt-1 text-[22px] font-semibold tabular-nums">{n}</dd></div>
           ))}
         </dl>
         {b.last_error && <p className="mt-4 font-mono text-[12px] text-accent">{b.last_error}</p>}
@@ -400,5 +401,12 @@ function NotifySection() {
 }
 
 export default function Setup() {
-  return <div><Checklist /><ModelSection /><ResumeSection /><ProfileSections /><AnswersSection /><SourcesSection /><NotionSection /><BackupSection /><NotifySection /></div>
+  return (
+    <div className="grid grid-cols-12 gap-x-10">
+      <aside className="col-span-12 hidden lg:col-span-3 lg:block"><SetupNav /></aside>
+      <div className="col-span-12 lg:col-span-9">
+        <SectionPanels><Checklist /><ModelSection /><ResumeSection /><ProfileSections /><AnswersSection /><SourcesSection /><NotionSection /><BackupSection /><NotifySection /></SectionPanels>
+      </div>
+    </div>
+  )
 }
