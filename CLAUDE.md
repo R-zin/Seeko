@@ -6,7 +6,9 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 
 ## Commands
 - Dev (both servers): `./dev.sh`  -> UI :5173 (proxies /api), API :8000
-- Backend tests: `cd backend && .venv/bin/python -m pytest -q` (PostgreSQL tests use `TEST_DATABASE_URL`, else the embedded server)
+- Backend tests: `cd backend && .venv/bin/python -m pytest -q` (PostgreSQL tests use `TEST_DATABASE_URL`, else the embedded server).
+  `tests/test_ui.py` drives the built UI in Chromium: build first (`cd frontend && npx vite build`); it skips locally without
+  `frontend/dist` and fails in CI (the backend job builds the frontend before pytest).
 - Job search CLI: `cd backend && .venv/bin/python -m jobsearch --help` (run / runs / run-info / resume / jobs / show / db /
   add / doctor / backup / restore-backup)
 - Frontend: `cd frontend && npx tsc -b && npx vite build`
@@ -88,7 +90,8 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 - Monochrome design tokens in `index.css` (`accent`/`ok`/`warn` are inks, not hues: distinguish states by fill / outline /
   shape, never colour). Motion helpers: `.anim-in`, `.anim-pop`, `.anim-fade`, `.stagger`, `.skeleton`; all disabled by
   `prefers-reduced-motion`. `ui.tsx` primitives + theme (`setTheme`/`cycleTheme`, localStorage) + `toast()`/`<Toaster>`.
-- `App.tsx` top bar (sliding segmented tabs, view transitions), global shortcuts; `palette.tsx` command palette + shortcut
+- `App.tsx` top bar (sliding segmented tabs, view transitions via `withTransition`, which swallows the rejection of an
+  interrupted transition), global shortcuts; `palette.tsx` command palette + shortcut
   sheet; Pipeline shortcuts in `pages/Pipeline.tsx` (`typing()` decides when keys belong to a text field). Cross-component
   events: `seeko:select-job` (detail = job id), `seeko:add-job`.
 - `Section` is full width with id `s-<n>` (in-page jumps); `<SectionPanels>` puts section bodies on grey panels (Setup).

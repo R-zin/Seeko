@@ -16,7 +16,7 @@ export function CommandPalette({ open, onClose, go, showHelp }: { open: boolean;
   const input = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
 
-  useEffect(() => { if (open) { setQ(''); setI(0); setTimeout(() => input.current?.focus(), 0) } }, [open])
+  useEffect(() => { if (open) { setQ(''); setI(0) } }, [open])   // the input focuses itself as it mounts (autoFocus), so no keystroke is lost
   useEffect(() => {   // job search, debounced (full-text over title, company and description)
     if (!open) return
     const t = setTimeout(() => api<Job[]>(`/jobs?${q.trim() ? 'q=' + encodeURIComponent(q.trim()) : ''}`).then(j => setJobs(j.slice(0, 8))).catch(() => setJobs([])), 140)
@@ -66,7 +66,7 @@ export function CommandPalette({ open, onClose, go, showHelp }: { open: boolean;
         onMouseDown={e => e.stopPropagation()} onKeyDown={onKey}>
         <div className="flex items-center gap-3 border-b border-hair px-4">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="shrink-0 text-mute" aria-hidden><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35" /></svg>
-          <input ref={input} value={q} onChange={e => { setQ(e.target.value); setI(0) }} placeholder="Search jobs, or type a command…"
+          <input ref={input} autoFocus value={q} onChange={e => { setQ(e.target.value); setI(0) }} placeholder="Search jobs, or type a command…"
             aria-label="Search jobs or commands" className="h-12 w-full bg-transparent text-[15px] outline-none placeholder:text-mute focus-visible:outline-none" />
           <kbd>Esc</kbd>
         </div>
