@@ -93,7 +93,10 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
   events: `seeko:select-job` (detail = job id), `seeko:add-job`.
 - `Section` is full width with id `s-<n>` (in-page jumps); `<SectionPanels>` puts section bodies on grey panels (Setup).
   Setup's sticky index + readiness ring + scroll-spy is `SetupNav` in `checklist.tsx` (`CHECK_SECTION` maps checks to sections).
-  Screens were prototyped in Google Stitch (project "Seeko — monochrome redesign": Pipeline, Setup, Tracker).
+  Screens were prototyped in Google Stitch (project "Seeko — monochrome redesign": Pipeline, Setup, Tracker, full Tracker tab).
+- Tracker (`pages/Tracker.tsx`): `Stats` + `Board` share one `/jobs` fetch from the page root; `Board` columns map to
+  `application_status` values (`COLUMNS[].holds`), moves are PATCHes with an optimistic overlay. Keep card layout stable on
+  hover (no display toggles): layout shifts under the pointer break HTML5 drag-and-drop.
 
 ## Conventions / invariants
 - Approval gate is the default; full-auto is opt-in, capped daily, and must pause on CAPTCHA/2FA/unknown required fields.

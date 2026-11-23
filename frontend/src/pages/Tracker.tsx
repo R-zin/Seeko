@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { APPLICATION_STATUSES, api, type Job, type SearchRun } from '../api'
-import { Badge, Field, Kicker, Msg, Section, btn2Cls, btnCls, inputCls, linkBtnCls, pad, toast, useAction } from '../ui'
+import { Badge, Kicker, Msg, Section, btn2Cls, btnCls, inputCls, linkBtnCls, pad, toast, useAction } from '../ui'
 import { ApplicationSelect, NotionMark } from '../tracking'
 
 const STATUSES = ['scraped', 'scored', 'tailoring', 'tailored', 'applying', 'needs_review', 'applied', 'failed', 'skipped', 'tracked']
@@ -8,6 +8,110 @@ const SOURCES = ['greenhouse', 'lever', 'ashby', 'workday', 'careers', 'linkedin
 type SortKey = 'discovered_at' | 'score' | 'company' | 'title'
 
 const selectCls = inputCls + ' cursor-pointer pr-6 capitalize'
+
+/* Summary strip ---------------------------------------------------------- */
+const SENT = ['applied', 'assessment', 'interviewing', 'offer', 'accepted', 'rejected', 'ghosted']
+function Stats({ jobs }: { jobs: Job[] | null }) {
+  const sent = jobs?.filter(j => SENT.includes(j.application_status)) ?? []
+  const n = (k: string[]) => sent.filter(j => k.includes(j.application_status)).length
+  const replied = n(['assessment', 'interviewing', 'offer', 'accepted', 'rejected'])
+  const tiles: [string, string | number, string, number?][] = [
+    ['Applications', sent.length, `${jobs?.length ?? 0} jobs tracked`, jobs?.length ? sent.length / jobs.length : 0],
+    ['Interviewing', n(['interviewing']), `${n(['assessment'])} in assessment`],
+    ['Offers', n(['offer', 'accepted']), n(['accepted']) ? `${n(['accepted'])} accepted` : 'decision pending'],
+    ['Response rate', sent.length ? `${Math.round(100 * replied / sent.length)}%` : '—', `${replied} of ${sent.length} replied`, sent.length ? replied / sent.length : 0],
+    ['Awaiting reply', n(['applied']), `${n(['ghosted'])} marked no response`],
+  ]
+  return (
+    <div className="stagger mb-10 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5" aria-label="Summary">
+      {tiles.map(([label, value, sub, bar], i) => (
+        <div key={label} className="rounded-xl border border-hair p-4 transition-shadow duration-200 hover:shadow-[var(--shadow)]">
+          <div className="font-mono text-[10.5px] uppercase tracking-[0.1em] text-mute">{pad(i + 1)} / {label}</div>
+          <div className="mt-2 text-[34px] font-semibold leading-none tracking-[-0.04em] tabular-nums">{jobs ? value : <span className="skeleton inline-block h-8 w-14" />}</div>
+          <div className="mt-2 font-mono text-[11px] text-mute">{sub}</div>
+          {bar !== undefined && <div className="mt-3 h-[3px] overflow-hidden rounded-full bg-paper-3"><div className="h-full rounded-full bg-ink transition-[width] duration-700 ease-out" style={{ width: `${Math.min(1, bar) * 100}%` }} /></div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/* 02 — Application board ------------------------------------------------- */
+const COLUMNS: { key: string; title: string; holds: string[]; note?: string }[] = [
+  { key: 'applied', title: 'Applied', holds: ['applied'] },
+  { key: 'assessment', title: 'Assessment', holds: ['assessment'] },
+  { key: 'interviewing', title: 'Interviewing', holds: ['interviewing'] },
+  { key: 'offer', title: 'Offer', holds: ['offer', 'accepted'] },
+  { key: 'rejected', title: 'Closed', holds: ['rejected', 'withdrawn', 'ghosted'], note: 'Rejected · withdrawn · no response' },
+]
+
+/** Drag a card to another column (or use its menu) to change its application status; it reaches Notion like any edit. */
+function Board({ jobs, reload }: { jobs: Job[] | null; reload: () => void }) {
+  const [drag, setDrag] = useState<string | null>(null)
+  const [over, setOver] = useState<string | null>(null)
+  const [moved, setMoved] = useState<Record<string, string>>({})   // optimistic moves until the next reload
+  useEffect(() => setMoved({}), [jobs])
+  const statusOf = (j: Job) => moved[j.id] ?? j.application_status
+  const move = async (j: Job, to: string) => {
+    if (COLUMNS.find(c => c.key === to)?.holds.includes(statusOf(j))) return
+    setMoved(m => ({ ...m, [j.id]: to }))
+    try { await api(`/jobs/${j.id}`, { method: 'PATCH', json: { application_status: to } }); toast(`${j.title} → ${COLUMNS.find(c => c.key === to)?.title}`) }
+    catch (e: any) { toast(e.message, false); setMoved(m => { const { [j.id]: _, ...r } = m; return r }) }
+    reload()
+  }
+  const cards = (jobs ?? []).filter(j => COLUMNS.some(c => c.holds.includes(statusOf(j))))
+  return (
+    <Section n="02" title="Application board" note="Every application you sent, by stage. Drag a card to another column, or use its menu."
+      aside={<span className="font-mono text-[12px] text-mute">{cards.length} applications · {COLUMNS.length} columns</span>}>
+      {!jobs ? <div className="skeleton h-56" /> : (
+        <div className="grid auto-cols-[minmax(13rem,1fr)] grid-flow-col gap-3 overflow-x-auto pb-2">
+          {COLUMNS.map(c => {
+            const list = cards.filter(j => c.holds.includes(statusOf(j))).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+            const hot = over === c.key && drag && !c.holds.includes(statusOf(cards.find(j => j.id === drag)!))
+            return (
+              <div key={c.key} aria-label={`${c.title} column`}
+                onDragOver={e => { e.preventDefault(); setOver(c.key) }} onDragLeave={() => setOver(o => o === c.key ? null : o)}
+                onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain') || drag; const j = cards.find(x => x.id === id); setOver(null); setDrag(null); if (j) move(j, c.key) }}
+                className={`flex min-h-[12rem] flex-col rounded-xl border p-2.5 transition-[background-color,border-color] duration-200 ${hot ? 'border-ink bg-paper-3' : 'border-hair bg-paper-2'}`}>
+                <div className="flex items-start justify-between px-1.5 pb-2.5 pt-1">
+                  <div><div className="font-mono text-[11px] font-semibold uppercase tracking-[0.1em]">{c.title}</div>
+                    {c.note && <div className="text-[10.5px] text-mute">{c.note}</div>}</div>
+                  <span className={`rounded-md px-1.5 py-0.5 font-mono text-[11px] ${c.key === 'offer' && list.length ? 'bg-ink text-paper' : 'border border-hair bg-paper'}`}>{list.length}</span>
+                </div>
+                <ul className="stagger flex flex-1 flex-col gap-2">
+                  {list.map(j => {
+                    const closed = c.key === 'rejected'
+                    return (
+                      <li key={j.id} draggable onDragStart={e => { e.dataTransfer.setData('text/plain', j.id); e.dataTransfer.effectAllowed = 'move'; setDrag(j.id) }}
+                        onDragEnd={() => { setDrag(null); setOver(null) }}
+                        className={`group cursor-grab rounded-lg border bg-paper p-3 transition-[box-shadow,transform,opacity] duration-200 active:cursor-grabbing ${drag === j.id ? 'rotate-1 scale-[1.02] opacity-60 shadow-[var(--shadow)]' : 'border-hair hover:-translate-y-px hover:shadow-[var(--shadow)]'} ${c.key === 'offer' ? 'border-l-[3px] border-l-ink' : ''}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <span className={`text-[14px] font-semibold leading-tight ${closed ? 'text-mute line-through' : ''}`}>{j.title}</span>
+                          {j.score != null && <span className="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[11px] font-semibold">{j.score}</span>}
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-mute">
+                          <span className="truncate">{j.company}</span>
+                          <span className="shrink-0 font-mono text-[11px]">{closed ? APPLICATION_STATUSES.find(([k]) => k === statusOf(j))?.[1] ?? statusOf(j)
+                            : j.next_step_date ? `next ${j.next_step_date.slice(5)}` : j.applied_at ? j.applied_at.slice(5, 10) : ''}</span>
+                        </div>
+                        <select aria-label={`Move ${j.title}`} value="" onChange={e => e.target.value && move(j, e.target.value)}
+                          className="-mx-1.5 mt-1.5 w-[calc(100%+0.75rem)] cursor-pointer rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-[11.5px] text-mute transition-[border-color,color] duration-150 hover:border-hair hover:text-ink focus:border-ink focus:text-ink group-hover:text-ink-2">
+                          <option value="">Move to…</option>{APPLICATION_STATUSES.filter(([k]) => k !== 'not_applied').map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                        </select>
+                      </li>
+                    )
+                  })}
+                  {hot && <li className="anim-fade rounded-lg border border-dashed border-ink-2 py-5 text-center font-mono text-[11px] uppercase tracking-[0.1em] text-mute">Drop to move here</li>}
+                  {!list.length && !hot && <li className="py-6 text-center text-[12px] text-mute">Nothing here</li>}
+                </ul>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Section>
+  )
+}
 
 /* 01 — Agenda ------------------------------------------------------------ */
 type AItem = { id: string; title: string; company: string; next_step: string; next_step_date: string | null; url: string
@@ -34,15 +138,17 @@ function Agenda() {
 
   return (
     <Section n="01" title="Agenda" note={a ? `What your search needs from you${a.review || a.questions ? '' : ' today'}.` : 'Loading…'}
-      aside={a && (a.review > 0 || a.questions > 0) ? <p className="text-right text-[13px] leading-relaxed">
-        {a.review > 0 && <a className="block text-accent underline underline-offset-4" href="#pipeline">{a.review} form{a.review === 1 ? '' : 's'} waiting for approval →</a>}
-        {a.questions > 0 && <a className="block text-accent underline underline-offset-4" href="#setup">{a.questions} question{a.questions === 1 ? '' : 's'} to answer →</a>}
-      </p> : undefined}>
+      aside={<div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+        {a && a.review > 0 && <a className="underline underline-offset-4" href="#pipeline">{a.review} form{a.review === 1 ? '' : 's'} waiting →</a>}
+        {a && a.questions > 0 && <a className="underline underline-offset-4" href="#setup">{a.questions} question{a.questions === 1 ? '' : 's'} to answer →</a>}
+        <button className={btn2Cls} title="Also sent by itself once a day (Setup → Notifications)" disabled={act.busy}
+          onClick={() => act.run(async () => { await api('/agenda/digest', { method: 'POST' }); return 'Digest sent.' })}>Send digest now</button>
+      </div>}>
       {!a ? <div className="h-32 bg-paper-2" /> : <>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           {col('Next steps', a.next_steps, 'Nothing booked this week.', j => <>
-            <span className={`block font-mono text-[12px] ${j.when === 'overdue' ? 'text-accent' : j.when === 'today' ? 'text-ink' : 'text-mute'}`}>
-              {j.next_step_date}{j.when === 'overdue' ? ' · overdue' : j.when === 'today' ? ' · today' : ''}</span>
+            <span className={`inline-block font-mono text-[11px] ${j.when === 'overdue' ? 'rounded bg-ink px-1.5 py-0.5 font-semibold uppercase text-paper' : j.when === 'today' ? 'font-semibold text-ink' : 'text-mute'}`}>
+              {j.when === 'overdue' ? '! overdue · ' : ''}{j.next_step_date}{j.when === 'today' ? ' · today' : ''}</span>
             <span className="block">{j.next_step || 'Next step'} — {name(j)} <span className="text-mute">at {j.company}</span></span>
           </>)}
           {col(`Follow up · ${a.followup_after_days}+ days`, a.follow_up, 'No application has gone quiet.', j => <>
@@ -55,12 +161,9 @@ function Agenda() {
           </>)}
           {col('Closing soon', a.apply_by, 'No deadline in the next 5 days.', j => <>
             {name(j)} <span className="text-mute">at {j.company}</span>
-            <span className={`block font-mono text-[12px] ${(j.days ?? 9) <= 1 ? 'text-accent' : 'text-mute'}`}>closes {j.valid_through?.slice(0, 10)} · {j.days === 0 ? 'today' : `${j.days} day${j.days === 1 ? '' : 's'} left`}</span>
+            <span className="mt-1 flex items-center justify-between font-mono text-[11px] text-mute">closes {j.valid_through?.slice(0, 10)}
+              <span className={`rounded px-1.5 py-0.5 font-semibold ${(j.days ?? 9) <= 2 ? 'border border-ink text-ink' : 'bg-paper-2 text-ink-2'}`}>{j.days === 0 ? 'today' : `${j.days}d left`}</span></span>
           </>)}
-        </div>
-        <div className="mt-6 flex flex-wrap items-center gap-4">
-          <button className={btn2Cls} disabled={act.busy} onClick={() => act.run(async () => { await api('/agenda/digest', { method: 'POST' }); return 'Digest sent.' })}>Send digest now</button>
-          <span className="text-[12px] text-mute">Also sent by itself once a day — Setup → Notifications.</span>
         </div>
         <Msg m={act.msg} />
       </>}
@@ -68,7 +171,7 @@ function Agenda() {
   )
 }
 
-/* 02 — Controls ---------------------------------------------------------- */
+/* 04 — Controls ---------------------------------------------------------- */
 function Controls() {
   const [s, setS] = useState<any>(null)
   const a = useAction()
@@ -79,40 +182,32 @@ function Controls() {
     setS({ ...s, approval_mode: approval })
   }
 
+  const num = (label: string, key: string, unit: string, max?: number) => (
+    <label className="flex items-center gap-2 font-mono text-[11.5px] text-mute">{label}
+      <span className="flex items-center rounded-md border border-hair bg-paper-2 pr-2 focus-within:border-ink">
+        <input type="number" min={0} max={max} aria-label={label} value={s[key]} onChange={e => setS({ ...s, [key]: +e.target.value })}
+          className="w-14 bg-transparent px-2 py-1.5 text-right font-semibold text-ink outline-none focus-visible:outline-none" />{unit}</span>
+    </label>
+  )
   return (
-    <Section n="02" title="Controls" note="How much the assistant may do on its own.">
-      {!s ? <div className="h-24 bg-paper-2" /> : <>
-        <Kicker>Submission mode</Kicker>
-        <div role="radiogroup" aria-label="Submission mode" className="mt-3 grid grid-cols-1 overflow-hidden rounded-xl border border-ink sm:grid-cols-2">
-          {[
-            { v: true, t: 'Approval gate', d: 'Fills every form, then waits for you to approve each submission.' },
-            { v: false, t: 'Full-auto', d: 'Submits on its own up to the daily cap. Still pauses on CAPTCHA, 2FA or unknown required fields.' },
-          ].map(o => {
-            const on = s.approval_mode === o.v
-            return (
-              <button key={o.t} role="radio" aria-checked={on} onClick={() => setMode(o.v)}
-                className={`p-5 text-left transition-colors first:border-b sm:first:border-r sm:first:border-b-0 border-ink ${on ? (o.v ? 'bg-ink text-paper' : 'bg-accent text-accent-ink') : 'hover:bg-paper-2'}`}>
-                <span className="flex items-center gap-2 text-[20px] font-semibold tracking-[-0.02em]">
-                  <i className={`inline-block h-3 w-3 border ${on ? 'border-current bg-current' : 'border-ink'}`} aria-hidden />{o.t}
-                </span>
-                <span className={`mt-2 block text-[13.5px] leading-snug ${on ? 'opacity-80' : 'text-mute'}`}>{o.d}</span>
-              </button>
-            )
-          })}
+    <Section n="04" title="Controls" note="How much the assistant may do on its own.">
+      {!s ? <div className="skeleton h-16" /> : <>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border border-hair p-3">
+          <div role="radiogroup" aria-label="Submission mode" className="flex rounded-lg bg-paper-2 p-1">
+            {[{ v: true, t: 'Approval gate', d: 'Fills every form, then waits for you to approve each submission.' },
+              { v: false, t: 'Full-auto', d: 'Submits on its own up to the daily cap. Still pauses on CAPTCHA, 2FA or unknown required fields.' }].map(o => {
+              const on = s.approval_mode === o.v
+              return <button key={o.t} role="radio" aria-checked={on} title={o.d} onClick={() => setMode(o.v)}
+                className={`rounded-md px-3.5 py-1.5 text-[13.5px] font-medium transition-[background-color,color] duration-200 ${on ? 'bg-ink text-paper shadow-[var(--shadow)]' : 'text-ink-2 hover:text-ink'}`}>{o.t}{on ? ' (active)' : ''}</button>
+            })}
+          </div>
+          <span className="hidden h-6 w-px bg-hair sm:block" aria-hidden />
+          {num('Daily cap', 'daily_apply_cap', 'apps')}
+          {num('Auto-discovery', 'discovery_interval_min', 'min')}
+          {num('Match threshold', 'min_match_score', '%', 100)}
+          <button className={btnCls + ' ml-auto'} disabled={a.busy} onClick={() => a.run(async () => { await api('/settings', { method: 'PUT', json: s }); return 'Controls saved.' })}>Save</button>
         </div>
-
-        <div className="mt-10 grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-3">
-          <Field label="Daily submission cap" hint="Hard limit for full-auto.">
-            <input type="number" min={0} className={inputCls + ' text-[28px] font-semibold tracking-[-0.03em] tabular-nums'} value={s.daily_apply_cap} onChange={e => setS({ ...s, daily_apply_cap: +e.target.value })} />
-          </Field>
-          <Field label="Auto-discovery, minutes" hint="0 = only when you press Run.">
-            <input type="number" min={0} className={inputCls + ' text-[28px] font-semibold tracking-[-0.03em] tabular-nums'} value={s.discovery_interval_min} onChange={e => setS({ ...s, discovery_interval_min: +e.target.value })} />
-          </Field>
-          <Field label="Default match threshold" hint="Profile setting overrides this.">
-            <input type="number" min={0} max={100} className={inputCls + ' text-[28px] font-semibold tracking-[-0.03em] tabular-nums'} value={s.min_match_score} onChange={e => setS({ ...s, min_match_score: +e.target.value })} />
-          </Field>
-        </div>
-        <div className="mt-8"><button className={btnCls} disabled={a.busy} onClick={() => a.run(async () => { await api('/settings', { method: 'PUT', json: s }); return 'Controls saved.' })}>Save controls</button></div>
+        <p className="mt-2 text-[12px] text-mute">{s.approval_mode ? 'Approval gate: nothing is submitted without you.' : `Full-auto: up to ${s.daily_apply_cap} applications a day without review.`} Auto-discovery 0 = only when you press Run.</p>
         <Msg m={a.msg} />
       </>}
     </Section>
@@ -175,41 +270,25 @@ function Register() {
   }
 
   return (
-    <Section n="03" title="Register" note="Every job Seeko has seen, mirrored to Notion when it is connected.">
-      <div className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2 xl:grid-cols-[minmax(10rem,1fr)_6.5rem_7rem_8rem_8rem_8.5rem]">
-        <Field label="Search" hint='Also searches saved descriptions. "exact phrase", -exclude, OR.'><input className={inputCls} placeholder="Title, company or description" value={f.q} onChange={e => setF({ ...f, q: e.target.value })} /></Field>
-        <Field label="Posting">
-          <select className={selectCls} value={f.state} onChange={e => setF({ ...f, state: e.target.value })}>
-            <option value="">All</option><option value="open">Open</option><option value="closed">Closed</option>
+    <Section n="03" title="Register" note={`Every job Seeko has seen, mirrored to Notion when it is connected. ${jobs ? `${jobs.length}${jobs.length === 500 ? '+' : ''} shown.` : ''}`}
+      aside={<div className="flex gap-2">
+        <a className={btn2Cls} title="Includes the full job descriptions" href={`/api/jobs/export?format=csv${qs ? '&' + qs : ''}`}>↓ Export CSV</a>
+        <a className={btn2Cls} title="Includes the full job descriptions" href={`/api/jobs/export?format=json${qs ? '&' + qs : ''}`}>↓ Export JSON</a>
+      </div>}>
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-hair bg-paper-2 p-2">
+        <input className={inputCls.replace('w-full ', '') + ' min-w-[14rem] flex-1 py-1.5'} aria-label="Search the register" title='Also searches saved descriptions. "exact phrase", -exclude, OR.'
+          placeholder="Filter by role, company or description…" value={f.q} onChange={e => setF({ ...f, q: e.target.value })} />
+        {([['state', 'Posting', [['open', 'Open'], ['closed', 'Closed']]],
+           ['job_type', 'Type', [['job', 'Jobs'], ['internship', 'Internships']]],
+           ['status', 'Status', STATUSES.map(x => [x, x.replace('_', ' ')])],
+           ['source', 'Source', SOURCES.map(x => [x, x])],
+           ['application_status', 'Application', APPLICATION_STATUSES]] as [keyof typeof f, string, string[][]][]).map(([k, label, opts]) => (
+          <select key={k} aria-label={label} value={f[k]} onChange={e => setF({ ...f, [k]: e.target.value })}
+            className={`cursor-pointer rounded-md border bg-paper px-2.5 py-1.5 text-[13px] transition-colors hover:border-ink ${f[k] ? 'border-ink font-semibold' : 'border-hair'}`}>
+            <option value="">{label}: all</option>{opts.map(([v, l]) => <option key={v} value={v}>{label}: {l}</option>)}
           </select>
-        </Field>
-        <Field label="Type">
-          <select className={selectCls} value={f.job_type} onChange={e => setF({ ...f, job_type: e.target.value })}>
-            <option value="">All</option><option value="job">Jobs</option><option value="internship">Internships</option>
-          </select>
-        </Field>
-        <Field label="Status">
-          <select className={selectCls} value={f.status} onChange={e => setF({ ...f, status: e.target.value })}>
-            <option value="">All</option>{STATUSES.map(x => <option key={x} value={x}>{x.replace('_', ' ')}</option>)}
-          </select>
-        </Field>
-        <Field label="Source">
-          <select className={selectCls} value={f.source} onChange={e => setF({ ...f, source: e.target.value })}>
-            <option value="">All</option>{SOURCES.map(x => <option key={x} value={x}>{x}</option>)}
-          </select>
-        </Field>
-        <Field label="Application">
-          <select className={selectCls.replace(' capitalize', '')} value={f.application_status} onChange={e => setF({ ...f, application_status: e.target.value })}>
-            <option value="">All</option>{APPLICATION_STATUSES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-          </select>
-        </Field>
-      </div>
-
-      <div className="mt-6 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[13px]">
-        <span className="text-mute">{jobs ? `${jobs.length}${jobs.length === 500 ? '+' : ''} shown` : ''}</span>
-        <a className={linkBtnCls} href={`/api/jobs/export?format=csv${qs ? '&' + qs : ''}`}>Export CSV ↓</a>
-        <a className={linkBtnCls} href={`/api/jobs/export?format=json${qs ? '&' + qs : ''}`}>Export JSON ↓</a>
-        <span className="text-[12px] text-mute">Includes the full job descriptions.</span>
+        ))}
+        {Object.values(f).some(Boolean) && <button className={linkBtnCls + ' px-2'} onClick={() => setF({ status: '', source: '', job_type: '', state: '', application_status: '', q: '' })}>Reset</button>}
       </div>
       {err && <Msg m={{ ok: false, text: err }} />}
       {picked.size > 0 && (
@@ -260,15 +339,15 @@ function Register() {
             ))}
           </tbody>
         </table>
-        {jobs && !rows.length && <p className="py-10 text-[15px] text-mute">{Object.values(f).some(Boolean) ? 'No jobs match these filters.' : 'The register is empty. Run discovery from the Pipeline tab.'}</p>}
+        {jobs && !rows.length && <p className="px-4 py-10 text-[14px] text-mute">{Object.values(f).some(Boolean) ? 'No jobs match these filters.' : 'The register is empty. Run discovery from the Pipeline tab.'}</p>}
         {!jobs && <div className="mt-4 h-40 bg-paper-2" />}
       </div>
     </Section>
   )
 }
 
-/* 04 — Searches --------------------------------------------------------- */
-const RUN_TONE: Record<string, string> = { running: 'text-ink', done: 'text-ok', failed: 'text-accent', interrupted: 'text-warn' }
+/* 05 — Searches --------------------------------------------------------- */
+const RUN_TONE: Record<string, string> = { running: 'border border-ink', done: 'bg-paper-3', failed: 'bg-ink text-paper', interrupted: 'border border-dashed border-ink-2' }
 const when = (iso: string) => iso.slice(0, 16).replace('T', ' ')
 
 function Searches() {
@@ -281,13 +360,10 @@ function Searches() {
   const stop = () => a.run(async () => { const r = await api('/search/cancel', { method: 'POST' }); setTimeout(load, 800); return `Stopping ${r.run_id} — it can be resumed later.` })
 
   return (
-    <Section n="04" title="Searches" note="Each run browses your sources, skips anything already in the database, and saves new jobs and internships with their full description.">
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-ink pb-4">
-        {d?.running
-          ? <button className={btn2Cls} disabled={a.busy} onClick={stop}>Stop search</button>
-          : <button className={btnCls} disabled={a.busy} onClick={start}>Search now</button>}
-        <span className="max-w-[60ch] text-[13px] text-mute">Known postings are recognised by link or by company and title, and are not opened again. A CAPTCHA or login wall stops that source for the run.</span>
-      </div>
+    <Section n="05" title="Searches" note="Each run skips postings already saved (same link, or same company and title) and stops a source at the first CAPTCHA or login wall."
+      aside={d?.running
+        ? <button className={btn2Cls} disabled={a.busy} onClick={stop}>Stop search</button>
+        : <button className={btnCls} disabled={a.busy} onClick={start}>↻ Search now</button>}>
       <Msg m={a.msg} />
       <div className="mt-4 overflow-x-auto rounded-xl border border-hair">
         <table className="w-full min-w-[760px] border-collapse text-left text-[14px] [&_td:first-child]:pl-4 [&_th:first-child]:pl-4">
@@ -300,11 +376,15 @@ function Searches() {
               const s = r.stats, rej = Object.entries(s.rejected ?? {}), blocked = Object.entries(s.blocked ?? {})
               const skipped = Object.entries(s.skipped_sources ?? {}), live = r.status === 'running' ? s.progress : undefined
               return (
-                <tr key={r.id} className="border-b border-hair align-baseline">
-                  <td className="py-3 pr-4 font-mono text-[12px] tabular-nums">{when(r.started_at)}<span className="ml-2 text-mute">{r.trigger}</span></td>
-                  <td className={`py-3 pr-4 text-[11px] font-semibold uppercase tracking-[0.1em] ${RUN_TONE[r.status] ?? ''}`}>
-                    {r.status}
-                    {live && <span className="mt-1 block font-normal normal-case tracking-normal text-mute">{live.step}…</span>}
+                <tr key={r.id} className={`border-b border-hair align-baseline last:border-0 ${r.status === 'running' ? 'bg-paper-2' : ''}`}>
+                  <td className="py-3 pr-4 font-mono text-[12px] tabular-nums">{r.status === 'running' && <i className="mr-2 inline-block h-1.5 w-1.5 rounded-full bg-ink pulse align-middle" aria-hidden />}{when(r.started_at)}<span className="ml-2 text-mute">{r.trigger}</span></td>
+                  <td className="py-3 pr-4 text-[11px] font-semibold uppercase tracking-[0.1em]">
+                    <span className={`rounded px-1.5 py-0.5 ${RUN_TONE[r.status] ?? ''}`}>{r.status}</span>
+                    {live && <>
+                      <span className="mt-1 block font-normal normal-case tracking-normal text-mute">{live.step}…</span>
+                      <span className="mt-1.5 block h-[3px] w-28 overflow-hidden rounded-full bg-paper-3"><span className="block h-full rounded-full bg-ink transition-[width] duration-700"
+                        style={{ width: `${Math.min(95, 15 + 80 * Math.max(0, ['planning', 'collecting leads', 'reading postings', 'screening', 'saving', 'finishing'].indexOf(live.step)) / 5)}%` }} /></span>
+                    </>}
                     {(r.status === 'interrupted' || r.status === 'failed') && <button className={linkBtnCls + ' ml-3 normal-case tracking-normal'} disabled={a.busy || !!d?.running} onClick={() => resume(r.id)}>Resume</button>}
                   </td>
                   <td className="py-3 pr-4 text-right tabular-nums">{s.leads ?? live?.leads ?? '—'}{live && !!live.read && <span className="block text-[11px] text-mute">{live.read} read</span>}</td>
@@ -328,35 +408,41 @@ function Searches() {
             })}
           </tbody>
         </table>
-        {d && !d.runs.length && <p className="py-8 text-[15px] text-mute">No searches yet. Set target roles and sources under Setup, then search.</p>}
+        {d && !d.runs.length && <p className="px-4 py-8 text-[14px] text-mute">No searches yet. Set target roles and sources under Setup, then search.</p>}
         {!d && <div className="mt-4 h-24 bg-paper-2" />}
       </div>
     </Section>
   )
 }
 
-/* 05 — Log --------------------------------------------------------------- */
+/* 06 — Log --------------------------------------------------------------- */
 function Log() {
   const [logs, setLogs] = useState<any[]>([])
   const [level, setLevel] = useState('')
+  const [counts, setCounts] = useState<Record<string, number>>({})
+  useEffect(() => {   // per-level counts over the latest 200 entries, for the filter pills
+    const load = () => api<any[]>('/logs?limit=200').then(ls => setCounts(ls.reduce((c, l) => ({ ...c, [l.level]: (c[l.level] ?? 0) + 1 }), { error: 0, warn: 0, info: 0 }))).catch(() => {})
+    load(); const t = setInterval(load, 15000); return () => clearInterval(t)
+  }, [])
   useEffect(() => {
     const load = () => api('/logs?limit=200' + (level ? `&level=${level}` : '')).then(setLogs).catch(() => {})
     load(); const t = setInterval(load, 5000); return () => clearInterval(t)
   }, [level])
 
   return (
-    <Section n="05" title="Log" note="Most recent first. Errors never stop the worker; failed jobs can be retried from the Pipeline.">
-      <div role="tablist" aria-label="Log level" className="flex gap-1.5">
+    <Section n="06" title="Log" note="Most recent first. Errors never stop the worker; failed jobs can be retried from the Pipeline."
+      aside={<div role="tablist" aria-label="Log level" className="flex gap-1.5">
         {[['', 'All'], ['error', 'Errors'], ['warn', 'Warnings'], ['info', 'Info']].map(([v, t]) => (
           <button key={t} role="tab" aria-selected={level === v} onClick={() => setLevel(v)}
-            className={`rounded-full border px-3 py-1 text-[12px] font-medium transition-[background-color,color,border-color] duration-200 ${level === v ? 'border-ink bg-ink text-paper' : 'border-hair text-ink-2 hover:border-ink'}`}>{t}</button>
+            className={`rounded-md border px-2.5 py-1 font-mono text-[11.5px] transition-[background-color,color,border-color] duration-200 ${level === v ? 'border-ink bg-ink text-paper' : 'border-hair text-ink-2 hover:border-ink'}`}>
+            {t}{v && counts[v] !== undefined ? ` (${counts[v]})` : ''}</button>
         ))}
-      </div>
-      <ol className="mt-3 max-h-[420px] overflow-auto rounded-xl border border-hair bg-paper-2 px-4 py-2 font-mono text-[12px] leading-relaxed">
+      </div>}>
+      <ol className="max-h-[420px] overflow-auto rounded-xl border border-hair bg-paper-2 px-4 py-2 font-mono text-[12px] leading-relaxed">
         {logs.map(l => (
           <li key={l.id} className="grid grid-cols-[4.5rem_3.5rem_1fr] gap-3 border-b border-hair/60 py-1.5 last:border-0">
             <span className="text-mute tabular-nums">{l.ts.slice(11, 19)}</span>
-            <span className={l.level === 'error' ? 'text-accent' : l.level === 'warn' ? 'text-warn' : 'text-mute'}>{l.level}</span>
+            <span className={l.level === 'error' ? 'font-semibold text-ink' : l.level === 'warn' ? 'text-ink-2' : 'text-mute'}>{l.level === 'error' ? '! error' : l.level}</span>
             <span className="break-words text-ink-2">{l.message}</span>
           </li>
         ))}
@@ -367,5 +453,8 @@ function Log() {
 }
 
 export default function Tracker() {
-  return <div><Agenda /><Controls /><Register /><Searches /><Log /></div>
+  const [all, setAll] = useState<Job[] | null>(null)   // every job (stats + board); the register has its own filtered list
+  const reload = useCallback(() => api<Job[]>('/jobs').then(setAll).catch(() => setAll([])), [])
+  useEffect(() => { reload(); const t = setInterval(reload, 8000); return () => clearInterval(t) }, [reload])
+  return <div><Stats jobs={all} /><Agenda /><Board jobs={all} reload={reload} /><Register /><Controls /><Searches /><Log /></div>
 }

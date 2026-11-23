@@ -102,6 +102,10 @@ A minimal black & white UI (prototyped in Google Stitch): white / near-black onl
 - **Keyboard:** `J`/`K` next/previous job, `A` approve, `S` skip, `O` open the posting, `1`–`5` queue filters, `G P` / `G S` /
   `G T` switch tabs, `?` lists everything.
 - **Bulk edits** in Tracker → Register: tick jobs, then set their application status, skip them or retry failed ones at once.
+- **Tracker** (Stitch-prototyped): a summary strip (applications, interviewing, offers, response rate, awaiting reply), the
+  agenda, an **application board** — drag a card between Applied / Assessment / Interviewing / Offer / Closed (or use its
+  "Move to…" menu) to change its application status, synced to Notion like any edit — then the register, compact
+  controls, search history with live progress, and the log.
 
 ## Notion tracker
 Seeko keeps a Notion database in step with its own, through Notion's MCP server (`npx -y @notionhq/notion-mcp-server@2`,
