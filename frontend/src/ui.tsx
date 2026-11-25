@@ -134,11 +134,17 @@ export function applyTheme(t: Theme = getTheme()) {
   const root = document.documentElement
   if (t === 'system') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', t)
 }
+/** Run a DOM update inside a view transition when the browser has them. A transition interrupted by the next one
+ *  (fast keyboard use) rejects its promises: that is expected, so swallow it instead of surfacing a page error. */
+export function withTransition(update: () => void) {
+  const d = document as any
+  if (!d.startViewTransition) return update()
+  const vt = d.startViewTransition(update)
+  for (const p of [vt.ready, vt.finished, vt.updateCallbackDone]) p?.catch?.(() => {})
+}
 export function setTheme(t: Theme) {
   try { localStorage.setItem(themeKey, t) } catch {}
-  const go = () => { applyTheme(t); themeSubs.forEach(f => f()) }
-  const d = document as any
-  if (d.startViewTransition) d.startViewTransition(go); else go()
+  withTransition(() => { applyTheme(t); themeSubs.forEach(f => f()) })
 }
 export function cycleTheme() {
   const t = getTheme(); setTheme(t === 'system' ? 'dark' : t === 'dark' ? 'light' : 'system')

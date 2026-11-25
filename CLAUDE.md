@@ -6,7 +6,9 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 
 ## Commands
 - Dev (both servers): `./dev.sh`  -> UI :5173 (proxies /api), API :8000
-- Backend tests: `cd backend && .venv/bin/python -m pytest -q` (PostgreSQL tests use `TEST_DATABASE_URL`, else the embedded server)
+- Backend tests: `cd backend && .venv/bin/python -m pytest -q` (PostgreSQL tests use `TEST_DATABASE_URL`, else the embedded server).
+  `tests/test_ui.py` drives the built UI in Chromium: build first (`cd frontend && npx vite build`); it skips locally without
+  `frontend/dist` and fails in CI (the backend job builds the frontend before pytest).
 - Job search CLI: `cd backend && .venv/bin/python -m jobsearch --help` (run / runs / run-info / resume / jobs / show / db /
   add / doctor / backup / restore-backup)
 - Frontend: `cd frontend && npx tsc -b && npx vite build`
@@ -88,12 +90,16 @@ All LLM calls use one OpenAI-compatible `/chat/completions` client (never `/resp
 - Monochrome design tokens in `index.css` (`accent`/`ok`/`warn` are inks, not hues: distinguish states by fill / outline /
   shape, never colour). Motion helpers: `.anim-in`, `.anim-pop`, `.anim-fade`, `.stagger`, `.skeleton`; all disabled by
   `prefers-reduced-motion`. `ui.tsx` primitives + theme (`setTheme`/`cycleTheme`, localStorage) + `toast()`/`<Toaster>`.
-- `App.tsx` top bar (sliding segmented tabs, view transitions), global shortcuts; `palette.tsx` command palette + shortcut
+- `App.tsx` top bar (sliding segmented tabs, view transitions via `withTransition`, which swallows the rejection of an
+  interrupted transition), global shortcuts; `palette.tsx` command palette + shortcut
   sheet; Pipeline shortcuts in `pages/Pipeline.tsx` (`typing()` decides when keys belong to a text field). Cross-component
   events: `seeko:select-job` (detail = job id), `seeko:add-job`.
 - `Section` is full width with id `s-<n>` (in-page jumps); `<SectionPanels>` puts section bodies on grey panels (Setup).
   Setup's sticky index + readiness ring + scroll-spy is `SetupNav` in `checklist.tsx` (`CHECK_SECTION` maps checks to sections).
-  Screens were prototyped in Google Stitch (project "Seeko — monochrome redesign": Pipeline, Setup, Tracker).
+  Screens were prototyped in Google Stitch (project "Seeko — monochrome redesign": Pipeline, Setup, Tracker, full Tracker tab).
+- Tracker (`pages/Tracker.tsx`): `Stats` + `Board` share one `/jobs` fetch from the page root; `Board` columns map to
+  `application_status` values (`COLUMNS[].holds`), moves are PATCHes with an optimistic overlay. Keep card layout stable on
+  hover (no display toggles): layout shifts under the pointer break HTML5 drag-and-drop.
 
 ## Conventions / invariants
 - Approval gate is the default; full-auto is opt-in, capped daily, and must pause on CAPTCHA/2FA/unknown required fields.

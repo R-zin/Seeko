@@ -5,7 +5,7 @@ import Tracker from './pages/Tracker'
 import { api } from './api'
 import { readCapture } from './addjob'
 import { CommandPalette, ShortcutsHelp } from './palette'
-import { Toaster, cycleTheme, useTheme } from './ui'
+import { Toaster, cycleTheme, useTheme, withTransition } from './ui'
 
 const TABS = [
   { key: 'pipeline', label: 'Pipeline', C: Pipeline },
@@ -57,10 +57,7 @@ export default function App() {
   const [help, setHelp] = useState(false)
   const theme = useTheme()
 
-  const go = useCallback((k: Key) => {
-    const d = document as any
-    if (d.startViewTransition) d.startViewTransition(() => setTabRaw(k)); else setTabRaw(k)
-  }, [])
+  const go = useCallback((k: Key) => withTransition(() => setTabRaw(k)), [])
   useEffect(() => { if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab); window.scrollTo({ top: 0 }) }, [tab])
   useEffect(() => {
     const h = () => {
